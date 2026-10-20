@@ -95,4 +95,32 @@ func TestConsistency(t *testing.T) {
 	if video {
 		closer("q:a llama", "llama.mp4", "testsrc60.mp4")
 	}
+
+	// Several texts in one forward pass (Options.BatchSeqs) give the same
+	// vectors as one at a time, within the kernels' rounding.
+	eb, err := Open(ctx, Options{Offline: true, BatchSeqs: 8, Device: DeviceCPU})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eb.Close()
+	var texts []Input
+	for _, in := range inputs {
+		if len(in.Media) == 0 {
+			texts = append(texts, in)
+		}
+	}
+	batched, err := eb.Embed(ctx, texts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range batched {
+		if r.Err != nil {
+			t.Fatalf("batched %s: %v", r.ID, r.Err)
+		}
+		if c := cosine(r.Embedding, vec[r.ID]); !(c >= 0.999) {
+			t.Errorf("batched %s: cosine %.5f to the one-at-a-time vector, want at least 0.999", r.ID, c)
+		} else {
+			t.Logf("batched %s: %.5f", r.ID, c)
+		}
+	}
 }

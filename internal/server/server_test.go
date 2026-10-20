@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -21,10 +22,14 @@ import (
 
 // fake embeds every input as a unit vector along axis 0, and fails inputs
 // whose text is "fail".
-type fake struct{ got []eg2.Input }
+type fake struct {
+	got   []eg2.Input
+	calls []int // inputs per Embed call
+}
 
 func (f *fake) Embed(_ context.Context, in ...eg2.Input) ([]eg2.Result, error) {
 	f.got = append(f.got, in...)
+	f.calls = append(f.calls, len(in))
 	out := make([]eg2.Result, len(in))
 	for i, x := range in {
 		if x.Text == "fail" {
@@ -234,5 +239,30 @@ func TestCORS(t *testing.T) {
 	plain.ServeHTTP(rec, httptest.NewRequest("OPTIONS", "/v1/embeddings", nil))
 	if rec.Code == http.StatusNoContent || rec.Header().Get("Access-Control-Allow-Origin") != "" {
 		t.Errorf("without the option: %d %v", rec.Code, rec.Header())
+	}
+}
+
+// With BatchTexts, consecutive text-only inputs go to Embed together; media
+// inputs still go alone.
+func TestBatchTexts(t *testing.T) {
+	body := `{"input":["a","b",{"image":"data:image/png;base64,aGk="},"c","d","e"]}`
+	f := &fake{}
+	if rec := post(t, New(f, Options{BatchTexts: true}), body); rec.Code != http.StatusOK {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	if got := fmt.Sprint(f.calls); got != "[2 1 3]" {
+		t.Errorf("Embed calls of %s inputs, want [2 1 3]", got)
+	}
+	var resp response
+	json.Unmarshal(post(t, New(&fake{}, Options{BatchTexts: true}), body).Body.Bytes(), &resp)
+	for i, d := range resp.Data {
+		if d.Index != i {
+			t.Errorf("data[%d] has index %d", i, d.Index)
+		}
+	}
+	f = &fake{}
+	post(t, New(f, Options{}), body)
+	if got := fmt.Sprint(f.calls); got != "[1 1 1 1 1 1]" {
+		t.Errorf("without BatchTexts: Embed calls of %s inputs", got)
 	}
 }

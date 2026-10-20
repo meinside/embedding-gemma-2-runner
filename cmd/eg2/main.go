@@ -119,6 +119,7 @@ type common struct {
 	weights   string
 	offline   bool
 	threads   int
+	batch     int
 	verbose   bool
 }
 
@@ -130,6 +131,8 @@ func (c *common) register(fs *flag.FlagSet) {
 	fs.StringVar(&c.weights, "weights", "q8_0", "q8_0, or bf16 for parity checks")
 	fs.BoolVar(&c.offline, "offline", false, "fail instead of downloading anything")
 	fs.IntVar(&c.threads, "threads", 0, "CPU threads (0: llama.cpp default)")
+	fs.IntVar(&c.batch, "batch", 0, "embed up to `N` text inputs in one pass; faster for many short texts, "+
+		"vectors differ from one-at-a-time ones by about 3e-4 cosine (0: one at a time)")
 	fs.BoolVar(&c.verbose, "v", false, "show llama.cpp logs")
 }
 
@@ -146,6 +149,7 @@ func (c *common) options(stderr io.Writer) (eg2.Options, error) {
 		Weights:   c.weights,
 		Offline:   c.offline,
 		Threads:   c.threads,
+		BatchSeqs: c.batch,
 		Verbose:   c.verbose,
 		Progress:  progressPrinter(stderr),
 	}, nil

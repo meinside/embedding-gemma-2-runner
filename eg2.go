@@ -62,6 +62,12 @@ type Options struct {
 	// 8192 (the default). A smaller value makes the context, and so the
 	// memory the model takes, smaller; longer inputs fail.
 	MaxTokens int
+	// BatchSeqs lets one Embed call put up to this many consecutive
+	// text-only inputs in one forward pass, which is faster for many short
+	// texts, most of all on a GPU. 0 or 1 embeds them one at a time. The
+	// vectors come out within about 3e-4 cosine of the one-at-a-time ones,
+	// so an index should be built one way or the other, not both.
+	BatchSeqs int
 	Verbose   bool // let llama.cpp log to stderr
 	// Progress, if set, reports downloads.
 	Progress func(name string, done, total int64)
@@ -137,6 +143,7 @@ func Open(ctx context.Context, o Options) (*Embedder, error) {
 		Device:    map[Device]engine.Device{DeviceAuto: engine.Auto, DeviceCPU: engine.CPU, DeviceGPU: engine.GPU}[o.Device],
 		Threads:   o.Threads,
 		MaxTokens: o.MaxTokens,
+		NSeqMax:   o.BatchSeqs,
 		Quiet:     !o.Verbose,
 	})
 	if err != nil {
@@ -200,11 +207,22 @@ func (e *Embedder) Embed(ctx context.Context, inputs ...Input) ([]Result, error)
 		return nil, errors.New("embedder is closed")
 	}
 	out := make([]Result, len(inputs))
-	for i, in := range inputs {
+	for i := 0; i < len(inputs); {
 		if err := ctx.Err(); err != nil {
 			return out[:i], err
 		}
+		in := inputs[i]
 		out[i] = Result{ID: in.ID}
+		if e.opts.BatchSeqs > 1 && len(in.Media) == 0 {
+			j := i + 1
+			for j < len(inputs) && len(inputs[j].Media) == 0 {
+				out[j] = Result{ID: inputs[j].ID}
+				j++
+			}
+			e.embedTextRun(inputs[i:j], out[i:j])
+			i = j
+			continue
+		}
 		if len(in.Media) > 0 {
 			if err := e.loadMedia(ctx); err != nil {
 				return out[:i], err
@@ -213,11 +231,43 @@ func (e *Embedder) Embed(ctx context.Context, inputs ...Input) ([]Result, error)
 		vec, tokens, mod, err := e.embedOne(ctx, in)
 		if err != nil {
 			out[i].Err = err
-			continue
+		} else {
+			out[i].Embedding, out[i].Tokens, out[i].Modality = vec, tokens, mod
 		}
-		out[i].Embedding, out[i].Tokens, out[i].Modality = vec, tokens, mod
+		i++
 	}
 	return out, nil
+}
+
+// embedTextRun embeds text-only inputs together (Options.BatchSeqs).
+func (e *Embedder) embedTextRun(inputs []Input, out []Result) {
+	var texts []engine.TextInput
+	var idx []int // input of each text
+	for i, in := range inputs {
+		prefix, err := in.prefix()
+		if err == nil {
+			_, err = in.segments(nil)
+		}
+		if err != nil {
+			out[i].Err = err
+			continue
+		}
+		texts = append(texts, engine.TextInput{Text: prefix + in.Text, ParseSpecial: !in.Literal})
+		idx = append(idx, i)
+	}
+	embs, errs := e.eng.EmbedTexts(texts)
+	for k, i := range idx {
+		if errs[k] != nil {
+			out[i].Err = errs[k]
+			continue
+		}
+		vec, err := normalize(embs[k].Vec)
+		if err != nil {
+			out[i].Err = err
+			continue
+		}
+		out[i].Embedding, out[i].Tokens, out[i].Modality = vec, embs[k].Tokens, "text"
+	}
 }
 
 // LoadMedia fetches and loads the vision and audio encoders now instead of

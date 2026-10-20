@@ -68,6 +68,7 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) error {
 			MaxAudio:        *maxAudio,
 			MaxVideo:        *maxVideo,
 			CORSOrigin:      *cors,
+			BatchTexts:      c.batch > 1,
 			Help:            inputsHelp(),
 			Logger:          logger,
 		}),

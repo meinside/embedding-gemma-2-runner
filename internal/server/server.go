@@ -50,6 +50,9 @@ type Options struct {
 	// call the API: it answers preflight requests and names the origin in
 	// the responses.
 	CORSOrigin string
+	// BatchTexts hands consecutive text-only inputs of a request to one
+	// Embed call, for an Embedder opened with eg2.Options.BatchSeqs.
+	BatchTexts bool
 	Help       string
 	Logger     *slog.Logger
 }
@@ -171,10 +174,17 @@ func (s *server) embeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := response{Object: "list", Model: ModelID, Data: make([]embedding, len(inputs))}
-	for i, in := range inputs {
+	for i := 0; i < len(inputs); {
 		// One at a time: the request is all or nothing, as OpenAI's is, so
-		// the inputs after a failing one are not embedded for nothing.
-		results, err := s.emb.Embed(r.Context(), in)
+		// the inputs after a failing one are not embedded for nothing. With
+		// BatchTexts a run of text-only inputs goes together.
+		j := i + 1
+		if s.opts.BatchTexts && len(inputs[i].Media) == 0 {
+			for j < len(inputs) && len(inputs[j].Media) == 0 {
+				j++
+			}
+		}
+		results, err := s.emb.Embed(r.Context(), inputs[i:j]...)
 		if err != nil {
 			if r.Context().Err() != nil {
 				return // client went away
@@ -182,22 +192,25 @@ func (s *server) embeddings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error(), "")
 			return
 		}
-		res := results[0]
-		if res.Err != nil {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("input[%d]: %v", i, res.Err), "input")
-			return
+		for k, res := range results {
+			idx := i + k
+			if res.Err != nil {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("input[%d]: %v", idx, res.Err), "input")
+				return
+			}
+			vec, err := eg2.Truncate(res.Embedding, dim)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, fmt.Sprintf("input[%d]: %v", idx, err), "")
+				return
+			}
+			var out any = vec
+			if req.EncodingFormat == "base64" {
+				out = encodeBase64(vec)
+			}
+			resp.Data[idx] = embedding{Object: "embedding", Index: idx, Embedding: out}
+			resp.Usage.PromptTokens += res.Tokens
 		}
-		vec, err := eg2.Truncate(res.Embedding, dim)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("input[%d]: %v", i, err), "")
-			return
-		}
-		var out any = vec
-		if req.EncodingFormat == "base64" {
-			out = encodeBase64(vec)
-		}
-		resp.Data[i] = embedding{Object: "embedding", Index: i, Embedding: out}
-		resp.Usage.PromptTokens += res.Tokens
+		i = j
 	}
 	resp.Usage.TotalTokens = resp.Usage.PromptTokens
 	writeJSON(w, http.StatusOK, resp)

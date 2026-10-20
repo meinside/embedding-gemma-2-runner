@@ -117,19 +117,12 @@ func runEmbed(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 
 	w := newRecordWriter(stdout, format)
 	failed, total := 0, 0
-	for j := range jobs {
-		total++
+	write := func(j job, r eg2.Result, err error) error {
 		rec := record{ID: j.in.ID, Source: j.source, Model: model}
 		if rec.ID == "" {
 			rec.ID = j.source
 		}
-		err := j.err
 		if err == nil {
-			var rs []eg2.Result
-			if rs, err = e.Embed(ctx, j.in); err != nil {
-				return err // ctx done or encoders unavailable: nothing else will work
-			}
-			r := rs[0]
 			if err = r.Err; err == nil {
 				var vec []float32
 				if vec, err = eg2.Truncate(r.Embedding, f.dim); err == nil {
@@ -144,9 +137,61 @@ func runEmbed(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 			failed++
 			rec = record{ID: rec.ID, Source: j.source, Error: err.Error()}
 		}
-		if err := w.write(rec); err != nil {
+		return w.write(rec)
+	}
+	// With -batch, text-only jobs wait for each other up to the batch size
+	// and are embedded in one Embed call; anything else flushes them first.
+	var pending []job
+	flush := func() error {
+		if len(pending) == 0 {
+			return nil
+		}
+		ins := make([]eg2.Input, len(pending))
+		for i, j := range pending {
+			ins[i] = j.in
+		}
+		rs, err := e.Embed(ctx, ins...)
+		if err != nil {
 			return err
 		}
+		for i, j := range pending {
+			if err := write(j, rs[i], nil); err != nil {
+				return err
+			}
+		}
+		pending = pending[:0]
+		return nil
+	}
+	for j := range jobs {
+		total++
+		if j.err == nil && f.batch > 1 && len(j.in.Media) == 0 {
+			pending = append(pending, j)
+			if len(pending) < f.batch {
+				continue
+			}
+		}
+		if err := flush(); err != nil {
+			return err // ctx done or encoders unavailable: nothing else will work
+		}
+		if j.err != nil {
+			if err := write(j, eg2.Result{}, j.err); err != nil {
+				return err
+			}
+			continue
+		}
+		if f.batch > 1 && len(j.in.Media) == 0 {
+			continue // it was in the batch just flushed
+		}
+		rs, err := e.Embed(ctx, j.in)
+		if err != nil {
+			return err
+		}
+		if err := write(j, rs[0], nil); err != nil {
+			return err
+		}
+	}
+	if err := flush(); err != nil {
+		return err
 	}
 	if err := w.close(); err != nil {
 		return err
