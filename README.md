@@ -18,10 +18,10 @@ Video needs `ffmpeg` and `ffprobe` in `PATH`. On Linux, the system `libffi.so.8`
 ## Use
 
 ```sh
-eg2 embed --task search-query --text "waterproof trail shoes"
-eg2 embed --task document photo.jpg talk.mp3 clip.mp4 notes.md     # one vector per file
-eg2 embed --text "Trail shoe <|image|> grip test <|video|>" --image shoe.jpg --video grip.mp4
-eg2 embed --input inputs.jsonl > vectors.jsonl
+eg2 embed -task search-query -text "waterproof trail shoes"
+eg2 embed -task document photo.jpg talk.mp3 clip.mp4 notes.md     # one vector per file
+eg2 embed -text "Trail shoe <|image|> grip test <|video|>" -image shoe.jpg -video grip.mp4
+eg2 embed -input inputs.jsonl > vectors.jsonl
 eg2 serve                                                           # POST /v1/embeddings on 127.0.0.1:8080
 ```
 

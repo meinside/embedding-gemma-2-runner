@@ -37,36 +37,36 @@ Text and media in one vector
   used. Without placeholders, items go after the text, in the order given.
 
   Command line (quote the text: < and | are special to the shell):
-    eg2 embed --text "Trail shoe <|image|> grip test <|video|>" \
-              --image shoe.jpg --video grip.mp4
+    eg2 embed -text "Trail shoe <|image|> grip test <|video|>" \
+              -image shoe.jpg -video grip.mp4
 
-  JSON (eg2 embed --input FILE.jsonl, or POST /v1/embeddings):
+  JSON (eg2 embed -input FILE.jsonl, or POST /v1/embeddings):
     {"id": "p1", "text": "Trail shoe <|image|> grip test <|video|>",
      "image": "shoe.jpg", "video": "grip.mp4"}
   Media fields take a string or an array. A server takes data: URIs
-  ("data:image/jpeg;base64,...") and, only with --allow-local-files, paths.
+  ("data:image/jpeg;base64,...") and, only with -allow-local-files, paths.
   Without placeholders, JSON key order decides the order:
   {"image": ..., "text": ...} puts the image first.
 
   To embed text that contains a placeholder or a string like <bos> as
-  written, use --literal (JSON: "literal": true); media then follow the text.
+  written, use -literal (JSON: "literal": true); media then follow the text.
 
 Tasks
   The model was trained with an instruction before the text. Give one with
-  --task (JSON: "task"); without it nothing is added, which works with some
+  -task (JSON: "task"); without it nothing is added, which works with some
   loss of precision. For retrieval, embed queries with a query task and the
   documents with "document". Classification, clustering and similarity give
   every input the same task.
 
 ` + tasks.String() + `
-  With "document", --title (JSON: "title") replaces "none". A file given to
-  eg2 embed as text gets its file name as the title. --prompt sets a prefix
+  With "document", -title (JSON: "title") replaces "none". A file given to
+  eg2 embed as text gets its file name as the title. -prompt sets a prefix
   of your own instead of a task. The flags add the prefix to inputs that have
   text; media alone get none, as the model card advises. A JSON input's own
   "task" always applies.
 
 Dimensions
-  --dim (JSON request: "dimensions") keeps the first 512, 256 or 128 values
+  -dim (JSON request: "dimensions") keeps the first 512, 256 or 128 values
   and normalizes them again. Compare vectors of the same size only.
 `
 }

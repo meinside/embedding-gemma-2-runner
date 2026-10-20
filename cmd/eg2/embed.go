@@ -22,7 +22,7 @@ var errSomeFailed = errors.New("some inputs failed")
 // anything bigger fails either way; as media it gets a clearer error.
 const maxTextFile = 4 << 20
 
-// flagPart is one --text, --image, --audio or --video, in command-line order.
+// flagPart is one -text, -image, -audio or -video, in command-line order.
 type flagPart struct {
 	kind  string
 	value string
@@ -39,7 +39,7 @@ func (f partFlag) Set(v string) error {
 	if f.kind == "text" {
 		for _, p := range *f.parts {
 			if p.kind == "text" {
-				return errors.New("--text given twice; use placeholders to place media in one text")
+				return errors.New("-text given twice; use placeholders to place media in one text")
 			}
 		}
 	}
@@ -70,7 +70,7 @@ func runEmbed(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	var f embedFlags
 	fs := newFlagSet("embed", "embed [flags] [FILE...]\n\n"+
 		"Each FILE is one input: an image, audio or video file, or a text file.\n"+
-		"--text and the media flags together make one more input.\n"+
+		"-text and the media flags together make one more input.\n"+
 		"See \"eg2 help inputs\" for placeholders and tasks.", stderr, &f.common)
 	f.register(fs)
 	fs.Var(partFlag{"text", &f.parts}, "text", "`text` of the combined input (\"-\" reads stdin)")
@@ -169,12 +169,12 @@ func (f *embedFlags) validate(nFiles int) error {
 		return fmt.Errorf("%w: -format %q: want json or jsonl", errUsage, f.format)
 	}
 	if len(f.parts) == 0 && nFiles == 0 && f.input == "" {
-		return fmt.Errorf("%w: nothing to embed: give FILEs, --text/--image/--audio/--video, or --input", errUsage)
+		return fmt.Errorf("%w: nothing to embed: give FILEs, -text/-image/-audio/-video, or -input", errUsage)
 	}
 	if f.input == "-" {
 		for _, p := range f.parts {
 			if p.kind == "text" && p.value == "-" {
-				return fmt.Errorf("%w: --text - and --input - both read stdin", errUsage)
+				return fmt.Errorf("%w: -text - and -input - both read stdin", errUsage)
 			}
 		}
 	}
@@ -193,7 +193,7 @@ func (f *embedFlags) defaults(in *eg2.Input) {
 }
 
 // jobs yields the inputs in order: the combined input from flags, then the
-// FILE arguments, then the --input lines. Reading errors become failed jobs so
+// FILE arguments, then the -input lines. Reading errors become failed jobs so
 // one bad file does not stop the rest.
 func (f *embedFlags) jobs(files []string, stdin io.Reader) (func(yield func(job) bool), error) {
 	var combined *eg2.Input
@@ -266,7 +266,7 @@ func inputName(input string) string {
 	return input
 }
 
-// combinedInput builds the input of --text and the media flags. Without
+// combinedInput builds the input of -text and the media flags. Without
 // placeholders the flags' order is the order in the vector, as JSON key order
 // is for ParseInput.
 func (f *embedFlags) combinedInput(stdin io.Reader) (in eg2.Input, err error) {
