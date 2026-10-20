@@ -17,8 +17,9 @@ import (
 // must be the one the yzma version in go.mod is written against, and contain
 // ggml-org/llama.cpp#30054 (EmbeddingGemma 2 support). See libAssets to upgrade.
 const (
-	LlamaVersion  = "v0.7.0"
-	llamaUpstream = "b11669"
+	LlamaVersion        = "v0.7.0"
+	llamaUpstream       = "b11669"
+	llamaManifestSHA256 = "f8fac86089bf92657fd33fa1ea0f2ee147b4c729567a99610c64a150d7ca97d3"
 )
 
 // Processor names a llama.cpp build. Every build also has the CPU backend, so a
@@ -39,10 +40,10 @@ const (
 // to 57 MB; asset choices follow yzma's resolver.
 //
 // URLs and digests come from the llama-cpp-builder v0.7.0.json manifest, whose
-// sha256 f8fac86089bf92657fd33fa1ea0f2ee147b4c729567a99610c64a150d7ca97d3 is
-// the DefaultVersion pin in yzma v1.30.0. To upgrade, take the new pin from
-// yzma's pkg/download/version.go, check that release's manifest against it,
-// and copy the digests here.
+// sha256 is llamaManifestSHA256, the DefaultVersion pin in yzma v1.30.0. To
+// upgrade, take the new pin from yzma's pkg/download/version.go, check that
+// release's manifest against it, and copy the digests here. TestLlamaPinMatchesYzma
+// fails when the pins drift apart.
 var libAssets = map[string]map[Processor][]pinned{
 	"darwin/arm64": {
 		Metal: {upstream("llama-b11669-bin-macos-arm64.tar.gz", "dbed55493d72bc1ba2babc8770d669c2289b5bc4ee9fb2a4dfc158d45b7d13fd")},
