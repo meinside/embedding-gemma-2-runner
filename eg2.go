@@ -63,9 +63,9 @@ type Options struct {
 	// memory the model takes, smaller; longer inputs fail.
 	MaxTokens int
 	// BatchSeqs lets one Embed call put up to this many consecutive
-	// text-only inputs in one forward pass: 2.5 times faster on an M1 GPU
+	// text-only inputs in one forward pass: 2.8 times faster on an M1 GPU
 	// for short texts, 1.8 on its CPU. 1 embeds them one at a time. 0, the
-	// default, means 8 when the model runs on a GPU and 1 on the CPU: on the
+	// default, means 32 when the model runs on a GPU and 1 on the CPU: on the
 	// GPU the vectors are the same either way, while the CPU kernels round
 	// differently for other batch shapes, within about 3e-4 cosine, so a CPU
 	// index should be built one way or the other, not both. Info.BatchSeqs

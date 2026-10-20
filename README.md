@@ -34,7 +34,7 @@ machines, set `--api-key` (or `$EG2_API_KEY`); `--cors ORIGIN` lets a browser pa
 Requests are bounded by `--max-body` (64 MiB), `--max-inputs` (256) and `--max-audio` and
 `--max-video` (10 minutes, read from the file's headers before anything is decoded); inputs
 that name files on the server's disk need `--allow-local-files`. On a GPU, `serve` and
-`embed` put up to 8 texts in one pass, about 2.5 times faster for short texts with the same
+`embed` put up to 32 texts in one pass, about 2.8 times faster for short texts with the same
 vectors; `--batch N` changes that, and `--batch 1` turns it off. On the CPU it is off by
 default: there the vectors would differ from the one-at-a-time ones by about 3e-4 in cosine,
 so a CPU index should be built one way or the other.

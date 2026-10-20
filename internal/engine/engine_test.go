@@ -31,7 +31,7 @@ func TestDefaultSeqs(t *testing.T) {
 		n    int
 		gpu  bool
 		want int
-	}{{0, true, 8}, {0, false, 1}, {1, true, 1}, {4, false, 4}, {-1, true, 8}} {
+	}{{0, true, 32}, {0, false, 1}, {1, true, 1}, {4, false, 4}, {-1, true, 32}} {
 		if got := defaultSeqs(c.n, c.gpu); got != c.want {
 			t.Errorf("defaultSeqs(%d, %v) = %d, want %d", c.n, c.gpu, got, c.want)
 		}

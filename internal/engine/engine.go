@@ -182,15 +182,17 @@ func open(o Options, gpu bool) (*Engine, error) {
 	return e, nil
 }
 
-// defaultSeqs resolves Options.NSeqMax: on a GPU batching is 2.5 times
-// faster and gives the same vectors, so it is on; the CPU kernels round
-// differently for other batch shapes, so there it stays off unless asked.
+// defaultSeqs resolves Options.NSeqMax. On a GPU batching gives the same
+// vectors and short texts went 2.5 times faster at 8 a pass, 2.7 at 16 and
+// 2.8 at 32 on an M1 Pro; the token budget per batch stays n_batch. The
+// CPU kernels round differently for other batch shapes, so there it stays
+// off unless asked.
 func defaultSeqs(n int, gpu bool) int {
 	switch {
 	case n > 0:
 		return n
 	case gpu:
-		return 8
+		return 32
 	}
 	return 1
 }
