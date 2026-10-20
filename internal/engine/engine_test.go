@@ -25,3 +25,15 @@ func TestGroups(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultSeqs(t *testing.T) {
+	for _, c := range []struct {
+		n    int
+		gpu  bool
+		want int
+	}{{0, true, 8}, {0, false, 1}, {1, true, 1}, {4, false, 4}, {-1, true, 8}} {
+		if got := defaultSeqs(c.n, c.gpu); got != c.want {
+			t.Errorf("defaultSeqs(%d, %v) = %d, want %d", c.n, c.gpu, got, c.want)
+		}
+	}
+}

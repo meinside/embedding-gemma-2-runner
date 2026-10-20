@@ -45,6 +45,7 @@ func runServe(ctx context.Context, c *serveCmd, stderr io.Writer) error {
 		}
 	}
 
+	info := e.Info()
 	logger := slog.New(slog.NewTextHandler(stderr, nil))
 	srv := &http.Server{
 		Addr: c.Addr,
@@ -56,7 +57,7 @@ func runServe(ctx context.Context, c *serveCmd, stderr io.Writer) error {
 			MaxAudio:        c.MaxAudio,
 			MaxVideo:        c.MaxVideo,
 			CORSOrigin:      c.CORS,
-			BatchTexts:      c.Common.Batch > 1,
+			BatchTexts:      info.BatchSeqs > 1,
 			Help:            inputsHelp(),
 			Logger:          logger,
 		}),
@@ -66,9 +67,8 @@ func runServe(ctx context.Context, c *serveCmd, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	info := e.Info()
 	logger.Info("serving", "addr", ln.Addr().String(), "device", info.Device, "model", info.Model,
-		"media_loaded", info.MediaLoaded, "media_device", info.MediaDevice)
+		"media_loaded", info.MediaLoaded, "media_device", info.MediaDevice, "batch", info.BatchSeqs)
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()

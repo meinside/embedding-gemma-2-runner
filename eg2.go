@@ -64,10 +64,12 @@ type Options struct {
 	MaxTokens int
 	// BatchSeqs lets one Embed call put up to this many consecutive
 	// text-only inputs in one forward pass: 2.5 times faster on an M1 GPU
-	// for short texts, 1.8 on its CPU. 0 or 1 embeds them one at a time.
-	// On the GPU the vectors are the same either way; the CPU kernels round
-	// differently for other batch shapes, within about 3e-4 cosine, so a
-	// CPU index should be built one way or the other, not both.
+	// for short texts, 1.8 on its CPU. 1 embeds them one at a time. 0, the
+	// default, means 8 when the model runs on a GPU and 1 on the CPU: on the
+	// GPU the vectors are the same either way, while the CPU kernels round
+	// differently for other batch shapes, within about 3e-4 cosine, so a CPU
+	// index should be built one way or the other, not both. Info.BatchSeqs
+	// tells which applied.
 	BatchSeqs int
 	Verbose   bool // let llama.cpp log to stderr
 	// Progress, if set, reports downloads.
@@ -99,6 +101,7 @@ type Info struct {
 	Weights      string
 	Device       string // "CPU" or the GPU's description
 	MediaDevice  string // the same for the vision and audio encoders; "" until they are loaded
+	BatchSeqs    int    // texts per forward pass (Options.BatchSeqs resolved for the device)
 	LlamaVersion string
 	Processor    string
 	LibDir       string
@@ -193,6 +196,7 @@ func (e *Embedder) Info() Info {
 	if e.eng != nil {
 		info.Device = e.eng.Device()
 		info.MediaDevice = e.eng.MediaDevice()
+		info.BatchSeqs = e.eng.NSeqMax()
 		info.MediaLoaded = e.eng.HasMMProj()
 	}
 	return info
@@ -214,7 +218,7 @@ func (e *Embedder) Embed(ctx context.Context, inputs ...Input) ([]Result, error)
 		}
 		in := inputs[i]
 		out[i] = Result{ID: in.ID}
-		if e.opts.BatchSeqs > 1 && len(in.Media) == 0 {
+		if e.eng.NSeqMax() > 1 && len(in.Media) == 0 {
 			j := i + 1
 			for j < len(inputs) && len(inputs[j].Media) == 0 {
 				out[j] = Result{ID: inputs[j].ID}

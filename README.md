@@ -33,10 +33,11 @@ removes the libraries and models of other versions from the cache.
 machines, set `--api-key` (or `$EG2_API_KEY`); `--cors ORIGIN` lets a browser page call it.
 Requests are bounded by `--max-body` (64 MiB), `--max-inputs` (256) and `--max-audio` and
 `--max-video` (10 minutes, read from the file's headers before anything is decoded); inputs
-that name files on the server's disk need `--allow-local-files`. `--batch N` on `serve` and
-`embed` embeds up to N texts in one pass, about 2.5 times faster for short texts on a GPU. On
-the CPU its vectors differ from the one-at-a-time ones by about 3e-4 in cosine, so build a CPU
-index one way or the other.
+that name files on the server's disk need `--allow-local-files`. On a GPU, `serve` and
+`embed` put up to 8 texts in one pass, about 2.5 times faster for short texts with the same
+vectors; `--batch N` changes that, and `--batch 1` turns it off. On the CPU it is off by
+default: there the vectors would differ from the one-at-a-time ones by about 3e-4 in cosine,
+so a CPU index should be built one way or the other.
 
 From Go:
 

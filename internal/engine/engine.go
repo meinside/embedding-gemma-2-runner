@@ -38,8 +38,8 @@ type Options struct {
 	Device    Device
 	Threads   int // 0: llama.cpp default
 	MaxTokens int // tokens per input, at most the model's 8192
-	// NSeqMax is how many texts EmbedTexts may put in one forward pass; 0
-	// or 1 is one at a time.
+	// NSeqMax is how many texts EmbedTexts may put in one forward pass; 1
+	// is one at a time, 0 picks DefaultSeqs for the device.
 	NSeqMax int
 	Quiet   bool
 }
@@ -158,7 +158,7 @@ func open(o Options, gpu bool) (*Engine, error) {
 		return nil, fmt.Errorf("load %s: %w", o.TextModel, err)
 	}
 	e := &Engine{
-		model: model, gpu: gpu, threads: o.Threads, maxTokens: o.MaxTokens, nSeqMax: max(1, o.NSeqMax),
+		model: model, gpu: gpu, threads: o.Threads, maxTokens: o.MaxTokens, nSeqMax: defaultSeqs(o.NSeqMax, gpu),
 		nEmbdInp: llama.ModelNEmbdInp(model), nEmbdOut: llama.ModelNEmbdOut(model),
 	}
 
@@ -181,6 +181,22 @@ func open(o Options, gpu bool) (*Engine, error) {
 	}
 	return e, nil
 }
+
+// defaultSeqs resolves Options.NSeqMax: on a GPU batching is 2.5 times
+// faster and gives the same vectors, so it is on; the CPU kernels round
+// differently for other batch shapes, so there it stays off unless asked.
+func defaultSeqs(n int, gpu bool) int {
+	switch {
+	case n > 0:
+		return n
+	case gpu:
+		return 8
+	}
+	return 1
+}
+
+// NSeqMax is how many texts EmbedTexts puts in one forward pass.
+func (e *Engine) NSeqMax() int { return e.nSeqMax }
 
 // LoadMMProj loads the vision and audio encoders. On a GPU engine it tries the
 // GPU first, then the CPU.

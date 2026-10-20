@@ -107,6 +107,7 @@ func runEmbed(ctx context.Context, f *embedCmd, stdin io.Reader, stdout, stderr 
 	defer e.Close()
 	info := e.Info()
 	model := fmt.Sprintf("%s/%s", shortModel(info.Model), info.Weights)
+	batch := info.BatchSeqs
 
 	w := newRecordWriter(stdout, format)
 	failed, total := 0, 0
@@ -157,9 +158,9 @@ func runEmbed(ctx context.Context, f *embedCmd, stdin io.Reader, stdout, stderr 
 	}
 	for j := range jobs {
 		total++
-		if j.err == nil && f.Common.Batch > 1 && len(j.in.Media) == 0 {
+		if j.err == nil && batch > 1 && len(j.in.Media) == 0 {
 			pending = append(pending, j)
-			if len(pending) < f.Common.Batch {
+			if len(pending) < batch {
 				continue
 			}
 		}
@@ -172,7 +173,7 @@ func runEmbed(ctx context.Context, f *embedCmd, stdin io.Reader, stdout, stderr 
 			}
 			continue
 		}
-		if f.Common.Batch > 1 && len(j.in.Media) == 0 {
+		if batch > 1 && len(j.in.Media) == 0 {
 			continue // it was in the batch just flushed
 		}
 		rs, err := e.Embed(ctx, j.in)
