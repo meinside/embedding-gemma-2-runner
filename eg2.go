@@ -14,6 +14,7 @@ import (
 	"image"
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -282,6 +283,11 @@ func (e *Embedder) embedOne(ctx context.Context, in Input) ([]float32, int, stri
 	return vec, emb.Tokens, mod, err
 }
 
+// videoExts are file extensions of video containers, used only to word the
+// error when such a file cannot be read as video.
+var videoExts = map[string]bool{".mp4": true, ".m4v": true, ".mov": true, ".mkv": true, ".webm": true,
+	".avi": true, ".mpg": true, ".mpeg": true, ".wmv": true, ".flv": true, ".3gp": true}
+
 // resolveKind decides MediaAuto from the content: a decodable image, else a
 // video ffprobe recognizes, else audio.
 func resolveKind(ctx context.Context, m Media) (MediaKind, error) {
@@ -294,19 +300,28 @@ func resolveKind(ctx context.Context, m Media) (MediaKind, error) {
 	if isImage(m) {
 		return MediaImage, nil
 	}
-	if media.FFmpegAvailable() {
-		path, cleanup, err := mediaFile(m)
-		if err != nil {
-			return 0, err
+	looksVideo := videoExts[strings.ToLower(filepath.Ext(m.Path))]
+	if !media.FFmpegAvailable() {
+		if looksVideo {
+			return 0, errors.New("video needs ffmpeg and ffprobe in PATH")
 		}
-		_, ok, err := media.ProbeVideo(ctx, path)
-		cleanup()
-		if err != nil {
-			return 0, err
-		}
-		if ok {
-			return MediaVideo, nil
-		}
+		return MediaAudio, nil
+	}
+	path, cleanup, err := mediaFile(m)
+	if err != nil {
+		return 0, err
+	}
+	_, ok, err := media.ProbeVideo(ctx, path)
+	cleanup()
+	if err != nil {
+		return 0, err
+	}
+	if ok {
+		return MediaVideo, nil
+	}
+	if looksVideo {
+		// Otherwise mtmd would report it as unsupported audio.
+		return 0, errors.New("not a video ffprobe can read")
 	}
 	return MediaAudio, nil
 }
