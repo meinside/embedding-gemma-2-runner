@@ -282,6 +282,7 @@ func (s *server) health(w http.ResponseWriter, _ *http.Request) {
 		"weights":      info.Weights,
 		"device":       info.Device,
 		"media_loaded": info.MediaLoaded,
+		"media_device": info.MediaDevice,
 		"video":        info.FFmpeg,
 	})
 }

@@ -45,7 +45,8 @@ type Engine struct {
 	model     llama.Model
 	lctx      llama.Context
 	mctx      mtmd.Context
-	gpu       bool
+	gpu       bool // the text model runs on the GPU
+	mmGPU     bool // the encoders do
 	gpuName   string
 	threads   int
 	nEmbdInp  int32
@@ -195,7 +196,7 @@ func (e *Engine) LoadMMProj(path string) error {
 		if err != nil {
 			return fmt.Errorf("load %s: %w", path, err)
 		}
-		e.mctx = ctx
+		e.mctx, e.mmGPU = ctx, gpu
 		return nil
 	}
 	if e.gpu {
@@ -204,6 +205,18 @@ func (e *Engine) LoadMMProj(path string) error {
 		}
 	}
 	return try(false)
+}
+
+// MediaDevice describes where the encoders run, "" before they are loaded.
+// On a GPU engine they can still land on the CPU when their GPU load fails.
+func (e *Engine) MediaDevice() string {
+	switch {
+	case e.mctx == 0:
+		return ""
+	case e.mmGPU:
+		return e.gpuName
+	}
+	return "CPU"
 }
 
 // HasMMProj reports whether LoadMMProj succeeded.

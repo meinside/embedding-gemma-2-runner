@@ -74,7 +74,8 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) error {
 		return err
 	}
 	info := e.Info()
-	logger.Info("serving", "addr", ln.Addr().String(), "device", info.Device, "model", info.Model, "media_loaded", info.MediaLoaded)
+	logger.Info("serving", "addr", ln.Addr().String(), "device", info.Device, "model", info.Model,
+		"media_loaded", info.MediaLoaded, "media_device", info.MediaDevice)
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()

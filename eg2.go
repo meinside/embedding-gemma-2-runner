@@ -60,7 +60,7 @@ type Options struct {
 	// 8192 (the default). A smaller value makes the context, and so the
 	// memory the model takes, smaller; longer inputs fail.
 	MaxTokens int
-	Verbose bool // let llama.cpp log to stderr
+	Verbose   bool // let llama.cpp log to stderr
 	// Progress, if set, reports downloads.
 	Progress func(name string, done, total int64)
 }
@@ -89,6 +89,7 @@ type Info struct {
 	Model        string // repository@revision
 	Weights      string
 	Device       string // "CPU" or the GPU's description
+	MediaDevice  string // the same for the vision and audio encoders; "" until they are loaded
 	LlamaVersion string
 	Processor    string
 	LibDir       string
@@ -181,6 +182,7 @@ func (e *Embedder) Info() Info {
 	}
 	if e.eng != nil {
 		info.Device = e.eng.Device()
+		info.MediaDevice = e.eng.MediaDevice()
 		info.MediaLoaded = e.eng.HasMMProj()
 	}
 	return info
