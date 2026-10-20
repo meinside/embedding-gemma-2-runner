@@ -26,6 +26,9 @@ import (
 // Dims is the full embedding size. Truncate makes the shorter Matryoshka sizes.
 const Dims = 768
 
+// MaxTokens is the model's context: the most tokens one input may have.
+const MaxTokens = 8192
+
 // Device selects where the model runs.
 type Device int
 
@@ -53,6 +56,10 @@ type Options struct {
 	SeedDir string
 	Offline bool // fail rather than download
 	Threads int  // CPU threads; 0 lets llama.cpp choose
+	// MaxTokens is the most tokens one input may have, up to the model's
+	// 8192 (the default). A smaller value makes the context, and so the
+	// memory the model takes, smaller; longer inputs fail.
+	MaxTokens int
 	Verbose bool // let llama.cpp log to stderr
 	// Progress, if set, reports downloads.
 	Progress func(name string, done, total int64)
@@ -104,6 +111,9 @@ func Open(ctx context.Context, o Options) (*Embedder, error) {
 	if err != nil {
 		return nil, err
 	}
+	if o.MaxTokens < 0 || o.MaxTokens > MaxTokens {
+		return nil, fmt.Errorf("MaxTokens %d: want 1 to %d", o.MaxTokens, MaxTokens)
+	}
 	e := &Embedder{opts: o, dirs: dirs, libDir: o.LibDir, proc: assets.Processor(o.Processor)}
 	if e.libDir == "" {
 		lo := assets.LibOptions{Processor: e.proc, Offline: o.Offline, Progress: o.Progress}
@@ -123,6 +133,7 @@ func Open(ctx context.Context, o Options) (*Embedder, error) {
 		TextModel: textModel,
 		Device:    map[Device]engine.Device{DeviceAuto: engine.Auto, DeviceCPU: engine.CPU, DeviceGPU: engine.GPU}[o.Device],
 		Threads:   o.Threads,
+		MaxTokens: o.MaxTokens,
 		Quiet:     !o.Verbose,
 	})
 	if err != nil {
