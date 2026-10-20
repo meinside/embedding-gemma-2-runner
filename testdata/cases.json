@@ -1,0 +1,31 @@
+{
+  "queries": [
+    {"id": "q:llama", "task": "search-query", "text": "a llama standing on grass"},
+    {"id": "q:red", "task": "search-query", "text": "a plain solid red color"},
+    {"id": "q:speech", "task": "search-query", "text": "a politician's speech asking citizens what they can do for their country"},
+    {"id": "q:beep", "task": "search-query", "text": "a pure electronic beep tone"},
+    {"id": "q:noise", "task": "search-query", "text": "loud white noise static hiss"},
+    {"id": "q:testcard", "task": "search-query", "text": "a colorful television test pattern with a counter"},
+    {"id": "q:aurora", "task": "search-query", "text": "What causes the northern lights?"}
+  ],
+  "documents": [
+    {"id": "t:aurora", "task": "document", "text": "The northern lights are caused by charged particles from the sun colliding with gases in Earth's atmosphere."},
+    {"id": "t:pasta", "task": "document", "text": "Boil the pasta in salted water for nine minutes, then drain and toss it with olive oil."},
+    {"id": "t:aurora-titled", "task": "document", "title": "Aurora borealis", "text": "The northern lights are caused by charged particles from the sun colliding with gases in Earth's atmosphere."},
+    {"id": "img:llama.jpg", "image": "llama.jpg"},
+    {"id": "img:red.png", "image": "red.png"},
+    {"id": "img:llama-exif6.jpg", "image": "llama-exif6.jpg"},
+    {"id": "aud:jfk.wav", "audio": "jfk.wav"},
+    {"id": "aud:jfk.mp3", "audio": "jfk.mp3"},
+    {"id": "aud:tone.wav", "audio": "tone.wav"},
+    {"id": "aud:noise.wav", "audio": "noise.wav"},
+    {"id": "vid:llama.mp4", "video": "llama.mp4"},
+    {"id": "vid:testsrc60.mp4", "video": "testsrc60.mp4"},
+    {"id": "vid:llama-rot90.mp4", "video": "llama-rot90.mp4"},
+    {"id": "mix:doc-text-image", "task": "document", "text": "A llama standing in a grassy field. <|image|> Photographed on a farm.", "image": "llama.jpg"},
+    {"id": "mix:image-then-text", "image": "llama.jpg", "text": "a photo of a llama"},
+    {"id": "mix:image-audio", "image": "red.png", "audio": "jfk.wav"},
+    {"id": "mix:text-video", "text": "A short clip <|video|> slowly zooming in on an animal.", "video": "llama.mp4"},
+    {"id": "mix:query-image", "task": "search-query", "text": "what animal is this? <|image|>", "image": "llama.jpg"}
+  ]
+}
