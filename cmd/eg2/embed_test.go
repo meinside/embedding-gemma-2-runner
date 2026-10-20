@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"image"
 	"image/png"
 	"os"
@@ -123,5 +124,37 @@ func TestUsageShowsCacheDirs(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("help lacks %q:\n%s", want, out.String())
 		}
+	}
+}
+
+func TestSetupPrune(t *testing.T) {
+	cache := t.TempDir()
+	old := filepath.Join(cache, "lib", "v0.0.1")
+	if err := os.MkdirAll(old, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(stdin string, extra ...string) string {
+		t.Helper()
+		var out, errOut bytes.Buffer
+		args := append([]string{"-cache", cache, "-prune"}, extra...)
+		if err := runSetup(context.Background(), args, strings.NewReader(stdin), &out, &errOut); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, errOut.String())
+		}
+		return out.String()
+	}
+	if out := run("n\n"); !strings.Contains(out, old) || !strings.Contains(out, "nothing removed") {
+		t.Errorf("answer n:\n%s", out)
+	}
+	if _, err := os.Stat(old); err != nil {
+		t.Fatal("removed after answering n")
+	}
+	if out := run("", "-y"); !strings.Contains(out, "removed "+old) {
+		t.Errorf("-y:\n%s", out)
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Error("not removed with -y")
+	}
+	if out := run("y\n"); !strings.Contains(out, "nothing to remove") {
+		t.Errorf("second run:\n%s", out)
 	}
 }

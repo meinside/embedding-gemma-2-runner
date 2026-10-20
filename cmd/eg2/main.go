@@ -46,7 +46,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	case "serve":
 		err = runServe(ctx, rest, stderr)
 	case "setup":
-		err = runSetup(ctx, rest, stdout, stderr)
+		err = runSetup(ctx, rest, stdin, stdout, stderr)
 	case "info":
 		err = runInfo(rest, stdout, stderr)
 	case "help", "-h", "-help", "--help":

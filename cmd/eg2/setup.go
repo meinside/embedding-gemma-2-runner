@@ -1,24 +1,29 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	eg2 "github.com/meinside/embedding-gemma-2-runner"
 	"github.com/meinside/embedding-gemma-2-runner/internal/assets"
 	"github.com/meinside/embedding-gemma-2-runner/internal/media"
 )
 
-func runSetup(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	var c common
 	fs := newFlagSet("setup", "setup [flags]\n\nDownloads the llama.cpp libraries and the text model, so later runs\n"+
-		"need no network. Images, audio and video also need -media.", stderr, &c)
+		"need no network. Images, audio and video also need -media.\n"+
+		"-prune instead removes what the cache holds for other versions.", stderr, &c)
 	c.register(fs)
 	withMedia := fs.Bool("media", false, "also download the vision and audio encoders (555 MB)")
+	prune := fs.Bool("prune", false, "remove libraries and models of other versions from the cache, and nothing else")
+	yes := fs.Bool("y", false, "with -prune: do not ask first")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -29,6 +34,9 @@ func runSetup(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	dirs, err := assets.CacheDirs(opts.CacheDir)
 	if err != nil {
 		return err
+	}
+	if *prune {
+		return runPrune(dirs, *yes, stdin, stdout)
 	}
 	if opts.LibDir == "" {
 		lo := assets.LibOptions{Processor: assets.Processor(opts.Processor), Progress: opts.Progress}
@@ -52,6 +60,39 @@ func runSetup(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			return err
 		}
 		fmt.Fprintf(stdout, "encoders    %s\n", path)
+	}
+	return nil
+}
+
+// runPrune removes what Prunable lists, after showing it and asking.
+func runPrune(dirs assets.Dirs, yes bool, stdin io.Reader, stdout io.Writer) error {
+	paths, err := assets.Prunable(dirs)
+	if err != nil {
+		return err
+	}
+	if len(paths) == 0 {
+		fmt.Fprintln(stdout, "nothing to remove: the cache holds only the current versions")
+		return nil
+	}
+	fmt.Fprintln(stdout, "to remove:")
+	for _, p := range paths {
+		fmt.Fprintf(stdout, "  %s\n", p)
+	}
+	if !yes {
+		fmt.Fprint(stdout, "remove? [y/N] ")
+		line, _ := bufio.NewReader(stdin).ReadString('\n')
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "y", "yes":
+		default:
+			fmt.Fprintln(stdout, "nothing removed")
+			return nil
+		}
+	}
+	for _, p := range paths {
+		if err := os.RemoveAll(p); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "removed %s\n", p)
 	}
 	return nil
 }
