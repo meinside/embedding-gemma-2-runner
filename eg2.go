@@ -63,10 +63,11 @@ type Options struct {
 	// memory the model takes, smaller; longer inputs fail.
 	MaxTokens int
 	// BatchSeqs lets one Embed call put up to this many consecutive
-	// text-only inputs in one forward pass, which is faster for many short
-	// texts, most of all on a GPU. 0 or 1 embeds them one at a time. The
-	// vectors come out within about 3e-4 cosine of the one-at-a-time ones,
-	// so an index should be built one way or the other, not both.
+	// text-only inputs in one forward pass: 2.5 times faster on an M1 GPU
+	// for short texts, 1.8 on its CPU. 0 or 1 embeds them one at a time.
+	// On the GPU the vectors are the same either way; the CPU kernels round
+	// differently for other batch shapes, within about 3e-4 cosine, so a
+	// CPU index should be built one way or the other, not both.
 	BatchSeqs int
 	Verbose   bool // let llama.cpp log to stderr
 	// Progress, if set, reports downloads.

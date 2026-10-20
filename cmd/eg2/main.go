@@ -54,7 +54,7 @@ type common struct {
 	Weights   string `long:"weights" default:"q8_0" choice:"q8_0" choice:"bf16" description:"bf16 is for parity checks"`
 	Offline   bool   `long:"offline" description:"fail instead of downloading anything"`
 	Threads   int    `long:"threads" value-name:"N" description:"CPU threads (0: llama.cpp default)"`
-	Batch     int    `long:"batch" value-name:"N" description:"embed up to N text inputs in one pass; faster for many short texts, vectors differ from one-at-a-time ones by about 3e-4 cosine (0: one at a time)"`
+	Batch     int    `long:"batch" value-name:"N" description:"embed up to N text inputs in one pass, faster for many short texts; on the CPU the vectors differ from one-at-a-time ones by about 3e-4 cosine (0: one at a time)"`
 	Verbose   bool   `short:"v" long:"verbose" description:"show llama.cpp logs"`
 }
 

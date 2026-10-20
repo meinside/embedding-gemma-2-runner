@@ -280,9 +280,9 @@ type TextInput struct {
 
 // EmbedTexts embeds texts, up to NSeqMax of them per forward pass as long as
 // their tokens fit one batch. Results align with texts; errs[i] is set for a
-// text that failed (too long, or its pass failed). Vectors come out within
-// about 3e-4 cosine of EmbedText's: the kernels round differently for
-// other batch shapes.
+// text that failed (too long, or its pass failed). On a GPU the vectors
+// equal EmbedText's; the CPU kernels round differently for other batch
+// shapes, within about 3e-4 cosine.
 func (e *Engine) EmbedTexts(texts []TextInput) (out []Embedding, errs []error) {
 	vocab := llama.ModelGetVocab(e.model)
 	out, errs = make([]Embedding, len(texts)), make([]error, len(texts))
