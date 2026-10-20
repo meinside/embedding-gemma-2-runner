@@ -52,11 +52,11 @@ func (p part) MarshalFlag() (string, error) { return "", nil }
 
 type embedCmd struct {
 	Common  common `group:"Model options"`
-	Text    part   `short:"t" long:"text" value-name:"TEXT" description:"text of the combined input (\"-\" reads stdin)"`
+	Text    part   `long:"text" value-name:"TEXT" description:"text of the combined input (\"-\" reads stdin)"`
 	Image   part   `long:"image" value-name:"FILE" description:"image for the combined input (repeatable)"`
 	Audio   part   `long:"audio" value-name:"FILE" description:"audio for the combined input (repeatable)"`
 	Video   part   `long:"video" value-name:"FILE" description:"video for the combined input (repeatable)"`
-	Task    string `long:"task" value-name:"TASK" description:"task prefix"`
+	Task    string `short:"t" long:"task" value-name:"TASK" description:"task prefix"`
 	Title   string `long:"title" value-name:"TITLE" description:"document title, with --task document"`
 	Prompt  string `long:"prompt" value-name:"TEXT" description:"custom prefix instead of --task"`
 	Literal bool   `short:"l" long:"literal" description:"keep placeholders and special-token strings in text as written"`

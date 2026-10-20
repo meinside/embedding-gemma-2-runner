@@ -174,7 +174,7 @@ func TestParseArgs(t *testing.T) {
 		})
 		return got, code, errOut.String()
 	}
-	o, code, _ := parse("embed", "--image", "a.jpg", "-t", "cap", "--video", "v.mp4", "--image", "b.png", "-d", "256", "-lv", "--task", "document", "f1", "f2")
+	o, code, _ := parse("embed", "--image", "a.jpg", "--text", "cap", "--video", "v.mp4", "--image", "b.png", "-d", "256", "-lv", "-t", "document", "f1", "f2")
 	if code != exitOK {
 		t.Fatal("parse failed")
 	}
@@ -187,7 +187,7 @@ func TestParseArgs(t *testing.T) {
 	if _, code, msg := parse("embed", "--format", "xml", "x"); code != exitUsage || !strings.Contains(msg, "xml") {
 		t.Errorf("bad choice: %d %q", code, msg)
 	}
-	if _, code, msg := parse("embed", "-t", "a", "-t", "b"); code != exitUsage || !strings.Contains(msg, "given twice") {
+	if _, code, msg := parse("embed", "--text", "a", "--text", "b"); code != exitUsage || !strings.Contains(msg, "given twice") {
 		t.Errorf("text twice: %d %q", code, msg)
 	}
 	if _, code, msg := parse(); code != exitUsage || !strings.Contains(msg, "Usage") {

@@ -29,7 +29,8 @@ const (
 var errUsage = errors.New("usage")
 
 // options are the commands and their flags; go-flags reads them from the
-// tags. Short letters go to the flags typed most; -v is verbose, as usual.
+// tags. Short letters go to the flags typed most (-t is --task); -v is
+// verbose, as usual.
 type options struct {
 	Embed embedCmd `command:"embed" description:"print embeddings as JSON" long-description:"Each FILE is one input: an image, audio or video file, or a text file.\n--text and the media options together make one more input.\nSee \"eg2 help inputs\" for placeholders and tasks."`
 	Serve serveCmd `command:"serve" description:"OpenAI-compatible embeddings server" long-description:"Serves POST /v1/embeddings (OpenAI-compatible, plus media inputs), GET /v1/models,\nGET /health, and GET / with the input guide. Requests run one at a time."`
