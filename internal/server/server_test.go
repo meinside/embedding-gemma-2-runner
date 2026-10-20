@@ -214,3 +214,25 @@ func TestMaxVideo(t *testing.T) {
 		t.Errorf("3 s of video under the limit: %d %s; want 200", rec.Code, rec.Body)
 	}
 }
+
+func TestCORS(t *testing.T) {
+	h := New(&fake{}, Options{APIKey: "k", CORSOrigin: "https://app.example"})
+	req := httptest.NewRequest("OPTIONS", "/v1/embeddings", nil)
+	req.Header.Set("Origin", "https://app.example")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent || rec.Header().Get("Access-Control-Allow-Origin") != "https://app.example" ||
+		!strings.Contains(rec.Header().Get("Access-Control-Allow-Headers"), "Authorization") {
+		t.Errorf("preflight: %d %v", rec.Code, rec.Header())
+	}
+	if rec := post(t, h, `{"input":"a"}`, "Authorization", "Bearer k"); rec.Code != http.StatusOK ||
+		rec.Header().Get("Access-Control-Allow-Origin") != "https://app.example" || rec.Header().Get("Vary") != "Origin" {
+		t.Errorf("response: %d %v", rec.Code, rec.Header())
+	}
+	plain := New(&fake{}, Options{})
+	rec = httptest.NewRecorder()
+	plain.ServeHTTP(rec, httptest.NewRequest("OPTIONS", "/v1/embeddings", nil))
+	if rec.Code == http.StatusNoContent || rec.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Errorf("without the option: %d %v", rec.Code, rec.Header())
+	}
+}

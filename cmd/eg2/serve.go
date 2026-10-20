@@ -29,6 +29,7 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) error {
 	maxAudio := fs.Duration("max-audio", 10*time.Minute, "reject audio longer than this, read from its headers (0: no limit)")
 	maxVideo := fs.Duration("max-video", 10*time.Minute, "reject video longer than this, read with ffprobe (0: no limit)")
 	preload := fs.Bool("media", false, "load the vision and audio encoders at start, not on the first media input")
+	cors := fs.String("cors", "", "let browser pages from this `origin` call the API (\"*\" for any)")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -66,6 +67,7 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) error {
 			MaxInputs:       *maxInputs,
 			MaxAudio:        *maxAudio,
 			MaxVideo:        *maxVideo,
+			CORSOrigin:      *cors,
 			Help:            inputsHelp(),
 			Logger:          logger,
 		}),

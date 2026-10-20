@@ -46,8 +46,12 @@ type Options struct {
 	// most (25 tokens a second, 8192 tokens).
 	MaxAudio time.Duration
 	MaxVideo time.Duration
-	Help     string
-	Logger   *slog.Logger
+	// CORSOrigin, if set, lets browser pages from this origin ("*" for any)
+	// call the API: it answers preflight requests and names the origin in
+	// the responses.
+	CORSOrigin string
+	Help       string
+	Logger     *slog.Logger
 }
 
 type server struct {
@@ -72,7 +76,31 @@ func New(e Embedder, o Options) http.Handler {
 	mux.HandleFunc("GET /v1/models", s.auth(s.models))
 	mux.HandleFunc("GET /health", s.health)
 	mux.HandleFunc("GET /{$}", s.help)
-	return s.logged(mux)
+	var h http.Handler = mux
+	if o.CORSOrigin != "" {
+		h = s.cors(h)
+	}
+	return s.logged(h)
+}
+
+// cors adds the headers a browser needs and answers its preflight requests,
+// which carry no credentials and so come before auth.
+func (s *server) cors(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Access-Control-Allow-Origin", s.opts.CORSOrigin)
+		if s.opts.CORSOrigin != "*" {
+			h.Add("Vary", "Origin")
+		}
+		if r.Method == http.MethodOptions {
+			h.Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			h.Set("Access-Control-Max-Age", "86400")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 type request struct {
