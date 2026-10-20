@@ -15,28 +15,21 @@ import (
 	"github.com/meinside/embedding-gemma-2-runner/internal/media"
 )
 
-func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	var c common
-	fs := newFlagSet("setup", "setup [flags]\n\nDownloads the llama.cpp libraries and the text model, so later runs\n"+
-		"need no network. Images, audio and video also need -media.\n"+
-		"-prune instead removes what the cache holds for other versions.", stderr, &c)
-	c.register(fs)
-	withMedia := fs.Bool("media", false, "also download the vision and audio encoders (555 MB)")
-	prune := fs.Bool("prune", false, "remove libraries and models of other versions from the cache, and nothing else")
-	yes := fs.Bool("y", false, "with -prune: do not ask first")
-	if err := parseFlags(fs, args); err != nil {
-		return err
-	}
-	opts, err := c.options(stderr)
-	if err != nil {
-		return err
-	}
+type setupCmd struct {
+	Common common `group:"Model options"`
+	Media  bool   `short:"m" long:"media" description:"also download the vision and audio encoders (555 MB)"`
+	Prune  bool   `long:"prune" description:"remove libraries and models of other versions from the cache, and nothing else"`
+	Yes    bool   `short:"y" long:"yes" description:"with --prune: do not ask first"`
+}
+
+func runSetup(ctx context.Context, c *setupCmd, stdin io.Reader, stdout, stderr io.Writer) error {
+	opts := c.Common.options(stderr)
 	dirs, err := assets.CacheDirs(opts.CacheDir)
 	if err != nil {
 		return err
 	}
-	if *prune {
-		return runPrune(dirs, *yes, stdin, stdout)
+	if c.Prune {
+		return runPrune(dirs, c.Yes, stdin, stdout)
 	}
 	if opts.LibDir == "" {
 		lo := assets.LibOptions{Processor: assets.Processor(opts.Processor), Progress: opts.Progress}
@@ -55,7 +48,7 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 		return err
 	}
 	fmt.Fprintf(stdout, "text model  %s\n", path)
-	if *withMedia {
+	if c.Media {
 		if path, err = assets.MMProj(ctx, dirs, mo); err != nil {
 			return err
 		}
@@ -97,7 +90,12 @@ func runPrune(dirs assets.Dirs, yes bool, stdin io.Reader, stdout io.Writer) err
 	return nil
 }
 
-// infoReport is what `eg2 info` shows; -json prints it as is.
+type infoCmd struct {
+	Cache string `long:"cache" value-name:"DIR" description:"cache for models and libraries"`
+	JSON  bool   `long:"json" description:"print as JSON"`
+}
+
+// infoReport is what `eg2 info` shows; --json prints it as is.
 type infoReport struct {
 	Model        string   `json:"model"`
 	LlamaVersion string   `json:"llama_cpp"`
@@ -111,15 +109,8 @@ type infoReport struct {
 	FFmpeg       bool     `json:"ffmpeg"`
 }
 
-func runInfo(args []string, stdout, stderr io.Writer) error {
-	var c common
-	fs := newFlagSet("info", "info [flags]\n\nShows what eg2 would use, without loading the model.", stderr, &c)
-	fs.StringVar(&c.cacheDir, "cache", "", "cache `dir` for models and libraries")
-	asJSON := fs.Bool("json", false, "print as JSON")
-	if err := parseFlags(fs, args); err != nil {
-		return err
-	}
-	d, err := assets.CacheDirs(c.cacheDir)
+func runInfo(c *infoCmd, stdout io.Writer) error {
+	d, err := assets.CacheDirs(c.Cache)
 	if err != nil {
 		return err
 	}
@@ -144,7 +135,7 @@ func runInfo(args []string, stdout, stderr io.Writer) error {
 			r.Installed = append(r.Installed, filepath.Base(f))
 		}
 	}
-	if *asJSON {
+	if c.JSON {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(r)
@@ -153,6 +144,6 @@ func runInfo(args []string, stdout, stderr io.Writer) error {
 	fmt.Fprintf(stdout, "llama.cpp   %s, build %s for this machine (available: %v)\n", r.LlamaVersion, r.Processor, r.Processors)
 	fmt.Fprintf(stdout, "ffmpeg      %v (needed for video)\n", r.FFmpeg)
 	fmt.Fprintf(stdout, "installed   %v\n\n", r.Installed)
-	printCacheDirs(stdout, c.cacheDir)
+	printCacheDirs(stdout, c.Cache)
 	return nil
 }

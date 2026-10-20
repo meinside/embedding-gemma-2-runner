@@ -8,50 +8,38 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"time"
 
 	eg2 "github.com/meinside/embedding-gemma-2-runner"
 	"github.com/meinside/embedding-gemma-2-runner/internal/server"
 )
 
-func runServe(ctx context.Context, args []string, stderr io.Writer) error {
-	var c common
-	fs := newFlagSet("serve", "serve [flags]\n\n"+
-		"Serves POST /v1/embeddings (OpenAI-compatible, plus media inputs), GET /v1/models,\n"+
-		"GET /health, and GET / with the input guide. Requests run one at a time.", stderr, &c)
-	c.register(fs)
-	addr := fs.String("addr", "127.0.0.1:8080", "listen `address`")
-	allowFiles := fs.Bool("allow-local-files", false, "let inputs name files on this machine (default: data: URIs only)")
-	apiKey := fs.String("api-key", "", "require this bearer `key` (default: $EG2_API_KEY, which keeps it out of ps)")
-	maxBody := fs.Int64("max-body", 64, "largest request in `MiB`")
-	maxInputs := fs.Int("max-inputs", 256, "most inputs per request")
-	maxAudio := fs.Duration("max-audio", 10*time.Minute, "reject audio longer than this, read from its headers (0: no limit)")
-	maxVideo := fs.Duration("max-video", 10*time.Minute, "reject video longer than this, read with ffprobe (0: no limit)")
-	preload := fs.Bool("media", false, "load the vision and audio encoders at start, not on the first media input")
-	cors := fs.String("cors", "", "let browser pages from this `origin` call the API (\"*\" for any)")
-	if err := parseFlags(fs, args); err != nil {
-		return err
-	}
-	if *apiKey == "" {
-		*apiKey = os.Getenv("EG2_API_KEY")
-	}
-	if host, _, err := net.SplitHostPort(*addr); err != nil {
-		return fmt.Errorf("%w: -addr: %v", errUsage, err)
-	} else if ip := net.ParseIP(host); *apiKey == "" && (ip == nil || !ip.IsLoopback()) && host != "localhost" {
-		fmt.Fprintf(stderr, "eg2: warning: %s is reachable from other machines and no API key is set\n", *addr)
+type serveCmd struct {
+	Common          common        `group:"Model options"`
+	Addr            string        `short:"a" long:"addr" default:"127.0.0.1:8080" value-name:"ADDRESS" description:"listen address"`
+	AllowLocalFiles bool          `long:"allow-local-files" description:"let inputs name files on this machine (default: data: URIs only)"`
+	APIKey          string        `long:"api-key" env:"EG2_API_KEY" value-name:"KEY" description:"require this bearer key; the environment variable keeps it out of ps"`
+	MaxBody         int64         `long:"max-body" default:"64" value-name:"MiB" description:"largest request"`
+	MaxInputs       int           `long:"max-inputs" default:"256" value-name:"N" description:"most inputs per request"`
+	MaxAudio        time.Duration `long:"max-audio" default:"10m" value-name:"DURATION" description:"reject audio longer than this, read from its headers (0: no limit)"`
+	MaxVideo        time.Duration `long:"max-video" default:"10m" value-name:"DURATION" description:"reject video longer than this, read with ffprobe (0: no limit)"`
+	Media           bool          `short:"m" long:"media" description:"load the vision and audio encoders at start, not on the first media input"`
+	CORS            string        `long:"cors" value-name:"ORIGIN" description:"let browser pages from this origin call the API (\"*\" for any)"`
+}
+
+func runServe(ctx context.Context, c *serveCmd, stderr io.Writer) error {
+	if host, _, err := net.SplitHostPort(c.Addr); err != nil {
+		return fmt.Errorf("%w: --addr: %v", errUsage, err)
+	} else if ip := net.ParseIP(host); c.APIKey == "" && (ip == nil || !ip.IsLoopback()) && host != "localhost" {
+		fmt.Fprintf(stderr, "eg2: warning: %s is reachable from other machines and no API key is set\n", c.Addr)
 	}
 
-	opts, err := c.options(stderr)
-	if err != nil {
-		return err
-	}
-	e, err := eg2.Open(ctx, opts)
+	e, err := eg2.Open(ctx, c.Common.options(stderr))
 	if err != nil {
 		return err
 	}
 	defer e.Close()
-	if *preload {
+	if c.Media {
 		if err := e.LoadMedia(ctx); err != nil {
 			return err
 		}
@@ -59,22 +47,22 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) error {
 
 	logger := slog.New(slog.NewTextHandler(stderr, nil))
 	srv := &http.Server{
-		Addr: *addr,
+		Addr: c.Addr,
 		Handler: server.New(e, server.Options{
-			AllowLocalFiles: *allowFiles,
-			APIKey:          *apiKey,
-			MaxBody:         *maxBody << 20,
-			MaxInputs:       *maxInputs,
-			MaxAudio:        *maxAudio,
-			MaxVideo:        *maxVideo,
-			CORSOrigin:      *cors,
-			BatchTexts:      c.batch > 1,
+			AllowLocalFiles: c.AllowLocalFiles,
+			APIKey:          c.APIKey,
+			MaxBody:         c.MaxBody << 20,
+			MaxInputs:       c.MaxInputs,
+			MaxAudio:        c.MaxAudio,
+			MaxVideo:        c.MaxVideo,
+			CORSOrigin:      c.CORS,
+			BatchTexts:      c.Common.Batch > 1,
 			Help:            inputsHelp(),
 			Logger:          logger,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	ln, err := net.Listen("tcp", *addr)
+	ln, err := net.Listen("tcp", c.Addr)
 	if err != nil {
 		return err
 	}

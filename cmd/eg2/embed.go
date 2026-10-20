@@ -22,41 +22,57 @@ var errSomeFailed = errors.New("some inputs failed")
 // anything bigger fails either way; as media it gets a clearer error.
 const maxTextFile = 4 << 20
 
-// flagPart is one -text, -image, -audio or -video, in command-line order.
+// flagPart is one --text, --image, --audio or --video, in command-line order.
 type flagPart struct {
 	kind  string
 	value string
 }
 
-type partFlag struct {
+// part is one of those options. Each occurrence is appended to a list the
+// four share, so the order across them is kept: without placeholders it is
+// the order in the vector.
+type part struct {
 	kind  string
 	parts *[]flagPart
 }
 
-func (f partFlag) String() string { return "" }
-
-func (f partFlag) Set(v string) error {
-	if f.kind == "text" {
-		for _, p := range *f.parts {
-			if p.kind == "text" {
-				return errors.New("-text given twice; use placeholders to place media in one text")
+func (p *part) UnmarshalFlag(v string) error {
+	if p.kind == "text" {
+		for _, q := range *p.parts {
+			if q.kind == "text" {
+				return errors.New("--text given twice; use placeholders to place media in one text")
 			}
 		}
 	}
-	*f.parts = append(*f.parts, flagPart{f.kind, v})
+	*p.parts = append(*p.parts, flagPart{p.kind, v})
 	return nil
 }
 
-type embedFlags struct {
-	common
-	parts   []flagPart
-	task    string
-	title   string
-	prompt  string
-	literal bool
-	input   string
-	dim     int
-	format  string
+func (p part) MarshalFlag() (string, error) { return "", nil }
+
+type embedCmd struct {
+	Common  common `group:"Model options"`
+	Text    part   `short:"t" long:"text" value-name:"TEXT" description:"text of the combined input (\"-\" reads stdin)"`
+	Image   part   `long:"image" value-name:"FILE" description:"image for the combined input (repeatable)"`
+	Audio   part   `long:"audio" value-name:"FILE" description:"audio for the combined input (repeatable)"`
+	Video   part   `long:"video" value-name:"FILE" description:"video for the combined input (repeatable)"`
+	Task    string `long:"task" value-name:"TASK" description:"task prefix"`
+	Title   string `long:"title" value-name:"TITLE" description:"document title, with --task document"`
+	Prompt  string `long:"prompt" value-name:"TEXT" description:"custom prefix instead of --task"`
+	Literal bool   `short:"l" long:"literal" description:"keep placeholders and special-token strings in text as written"`
+	Input   string `short:"i" long:"input" value-name:"FILE" description:"read JSON inputs, one per line, from FILE (\"-\": stdin)"`
+	Dim     int    `short:"d" long:"dim" default:"768" value-name:"N" description:"768, 512, 256 or 128"`
+	Format  string `short:"f" long:"format" choice:"json" choice:"jsonl" description:"default: json for one input, jsonl for more"`
+	Args    struct {
+		Files []string `positional-arg-name:"FILE"`
+	} `positional-args:"yes"`
+
+	parts []flagPart
+}
+
+// init points the four media options at the shared list.
+func (c *embedCmd) init() {
+	c.Text, c.Image, c.Audio, c.Video = part{"text", &c.parts}, part{"image", &c.parts}, part{"audio", &c.parts}, part{"video", &c.parts}
 }
 
 // job is one input and where it came from, for the output record.
@@ -66,48 +82,25 @@ type job struct {
 	err    error // the input could not even be read
 }
 
-func runEmbed(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	var f embedFlags
-	fs := newFlagSet("embed", "embed [flags] [FILE...]\n\n"+
-		"Each FILE is one input: an image, audio or video file, or a text file.\n"+
-		"-text and the media flags together make one more input.\n"+
-		"See \"eg2 help inputs\" for placeholders and tasks.", stderr, &f.common)
-	f.register(fs)
-	fs.Var(partFlag{"text", &f.parts}, "text", "`text` of the combined input (\"-\" reads stdin)")
-	fs.Var(partFlag{"image", &f.parts}, "image", "image `file` for the combined input (repeatable)")
-	fs.Var(partFlag{"audio", &f.parts}, "audio", "audio `file` for the combined input (repeatable)")
-	fs.Var(partFlag{"video", &f.parts}, "video", "video `file` for the combined input (repeatable)")
-	fs.StringVar(&f.task, "task", "", "task prefix: "+taskList()+" (default: none)")
-	fs.StringVar(&f.title, "title", "", "document title, with -task document")
-	fs.StringVar(&f.prompt, "prompt", "", "custom prefix instead of -task")
-	fs.BoolVar(&f.literal, "literal", false, "keep placeholders and special-token strings in text as written")
-	fs.StringVar(&f.input, "input", "", "read JSON inputs, one per line, from `file` (\"-\": stdin)")
-	fs.IntVar(&f.dim, "dim", eg2.Dims, "dimensions: 768, 512, 256 or 128")
-	fs.StringVar(&f.format, "format", "", "json or jsonl (default: json for one input, jsonl for more)")
-	if err := parseFlags(fs, args); err != nil {
-		return err
-	}
-	if err := f.validate(fs.NArg()); err != nil {
+func runEmbed(ctx context.Context, f *embedCmd, stdin io.Reader, stdout, stderr io.Writer) error {
+	files := f.Args.Files
+	if err := f.validate(len(files)); err != nil {
 		return err
 	}
 
-	jobs, err := f.jobs(fs.Args(), stdin)
+	jobs, err := f.jobs(files, stdin)
 	if err != nil {
 		return err
 	}
-	format := f.format
+	format := f.Format
 	if format == "" {
 		format = "json"
-		if f.input != "" || len(f.parts) > 0 && fs.NArg() > 0 || fs.NArg() > 1 {
+		if f.Input != "" || len(f.parts) > 0 && len(files) > 0 || len(files) > 1 {
 			format = "jsonl"
 		}
 	}
 
-	opts, err := f.options(stderr)
-	if err != nil {
-		return err
-	}
-	e, err := eg2.Open(ctx, opts)
+	e, err := eg2.Open(ctx, f.Common.options(stderr))
 	if err != nil {
 		return err
 	}
@@ -125,8 +118,8 @@ func runEmbed(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 		if err == nil {
 			if err = r.Err; err == nil {
 				var vec []float32
-				if vec, err = eg2.Truncate(r.Embedding, f.dim); err == nil {
-					rec.Modality, rec.Tokens, rec.Dim, rec.Embedding = r.Modality, r.Tokens, f.dim, vec
+				if vec, err = eg2.Truncate(r.Embedding, f.Dim); err == nil {
+					rec.Modality, rec.Tokens, rec.Dim, rec.Embedding = r.Modality, r.Tokens, f.Dim, vec
 					if j.in.Task != eg2.TaskNone {
 						rec.Task = string(j.in.Task)
 					}
@@ -139,7 +132,7 @@ func runEmbed(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 		}
 		return w.write(rec)
 	}
-	// With -batch, text-only jobs wait for each other up to the batch size
+	// With --batch, text-only jobs wait for each other up to the batch size
 	// and are embedded in one Embed call; anything else flushes them first.
 	var pending []job
 	flush := func() error {
@@ -164,9 +157,9 @@ func runEmbed(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	}
 	for j := range jobs {
 		total++
-		if j.err == nil && f.batch > 1 && len(j.in.Media) == 0 {
+		if j.err == nil && f.Common.Batch > 1 && len(j.in.Media) == 0 {
 			pending = append(pending, j)
-			if len(pending) < f.batch {
+			if len(pending) < f.Common.Batch {
 				continue
 			}
 		}
@@ -179,7 +172,7 @@ func runEmbed(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 			}
 			continue
 		}
-		if f.batch > 1 && len(j.in.Media) == 0 {
+		if f.Common.Batch > 1 && len(j.in.Media) == 0 {
 			continue // it was in the batch just flushed
 		}
 		rs, err := e.Embed(ctx, j.in)
@@ -203,23 +196,20 @@ func runEmbed(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	return nil
 }
 
-func (f *embedFlags) validate(nFiles int) error {
-	if err := eg2.CheckDim(f.dim); err != nil {
-		return fmt.Errorf("%w: -dim: %v", errUsage, err)
+func (f *embedCmd) validate(nFiles int) error {
+	if err := eg2.CheckDim(f.Dim); err != nil {
+		return fmt.Errorf("%w: --dim: %v", errUsage, err)
 	}
-	if _, err := eg2.Task(f.task).Prompt(); err != nil {
-		return fmt.Errorf("%w: -task: %v", errUsage, err)
+	if _, err := eg2.Task(f.Task).Prompt(); err != nil {
+		return fmt.Errorf("%w: --task: %v", errUsage, err)
 	}
-	if f.format != "" && f.format != "json" && f.format != "jsonl" {
-		return fmt.Errorf("%w: -format %q: want json or jsonl", errUsage, f.format)
+	if len(f.parts) == 0 && nFiles == 0 && f.Input == "" {
+		return fmt.Errorf("%w: nothing to embed: give FILEs, --text/--image/--audio/--video, or --input", errUsage)
 	}
-	if len(f.parts) == 0 && nFiles == 0 && f.input == "" {
-		return fmt.Errorf("%w: nothing to embed: give FILEs, -text/-image/-audio/-video, or -input", errUsage)
-	}
-	if f.input == "-" {
+	if f.Input == "-" {
 		for _, p := range f.parts {
 			if p.kind == "text" && p.value == "-" {
-				return fmt.Errorf("%w: -text - and -input - both read stdin", errUsage)
+				return fmt.Errorf("%w: --text - and --input - both read stdin", errUsage)
 			}
 		}
 	}
@@ -228,19 +218,19 @@ func (f *embedFlags) validate(nFiles int) error {
 
 // defaults applies the prefix flags to an input that has text and no prefix
 // of its own. Media alone get none, as the model card advises.
-func (f *embedFlags) defaults(in *eg2.Input) {
+func (f *embedCmd) defaults(in *eg2.Input) {
 	if !in.HasText() {
 		return
 	}
 	if in.Task == eg2.TaskNone && in.Prompt == "" && in.Title == "" {
-		in.Task, in.Title, in.Prompt = eg2.Task(f.task), f.title, f.prompt
+		in.Task, in.Title, in.Prompt = eg2.Task(f.Task), f.Title, f.Prompt
 	}
 }
 
 // jobs yields the inputs in order: the combined input from flags, then the
 // FILE arguments, then the -input lines. Reading errors become failed jobs so
 // one bad file does not stop the rest.
-func (f *embedFlags) jobs(files []string, stdin io.Reader) (func(yield func(job) bool), error) {
+func (f *embedCmd) jobs(files []string, stdin io.Reader) (func(yield func(job) bool), error) {
 	var combined *eg2.Input
 	if len(f.parts) > 0 {
 		in, err := f.combinedInput(stdin)
@@ -250,10 +240,10 @@ func (f *embedFlags) jobs(files []string, stdin io.Reader) (func(yield func(job)
 		combined = &in
 	}
 	var lines io.Reader
-	if f.input == "-" {
+	if f.Input == "-" {
 		lines = stdin
-	} else if f.input != "" {
-		file, err := os.Open(f.input)
+	} else if f.Input != "" {
+		file, err := os.Open(f.Input)
 		if err != nil {
 			return nil, err
 		}
@@ -268,7 +258,7 @@ func (f *embedFlags) jobs(files []string, stdin io.Reader) (func(yield func(job)
 			in, err := fileInput(path)
 			if err == nil {
 				f.defaults(&in)
-				in.Literal = in.Literal || f.literal && in.Text != ""
+				in.Literal = in.Literal || f.Literal && in.Text != ""
 				if in.Task == eg2.TaskDocument && in.Title == "" && in.Text != "" {
 					in.Title = filepath.Base(path)
 				}
@@ -289,7 +279,7 @@ func (f *embedFlags) jobs(files []string, stdin io.Reader) (func(yield func(job)
 			if len(line) == 0 {
 				continue
 			}
-			source := fmt.Sprintf("%s:%d", inputName(f.input), n)
+			source := fmt.Sprintf("%s:%d", inputName(f.Input), n)
 			in, err := eg2.ParseInput(line, eg2.ParseOptions{AllowPaths: true})
 			if err == nil {
 				f.defaults(&in)
@@ -299,7 +289,7 @@ func (f *embedFlags) jobs(files []string, stdin io.Reader) (func(yield func(job)
 			}
 		}
 		if err := sc.Err(); err != nil {
-			yield(job{source: inputName(f.input), err: err})
+			yield(job{source: inputName(f.Input), err: err})
 		}
 	}, nil
 }
@@ -311,11 +301,11 @@ func inputName(input string) string {
 	return input
 }
 
-// combinedInput builds the input of -text and the media flags. Without
+// combinedInput builds the input of --text and the media options. Without
 // placeholders the flags' order is the order in the vector, as JSON key order
 // is for ParseInput.
-func (f *embedFlags) combinedInput(stdin io.Reader) (in eg2.Input, err error) {
-	in = eg2.Input{ID: "args", Literal: f.literal}
+func (f *embedCmd) combinedInput(stdin io.Reader) (in eg2.Input, err error) {
+	in = eg2.Input{ID: "args", Literal: f.Literal}
 	defer f.defaults(&in) // after the text is known; in is a named result
 	hasPlaceholders := false
 	for i, p := range f.parts {
@@ -329,13 +319,13 @@ func (f *embedFlags) combinedInput(stdin io.Reader) (in eg2.Input, err error) {
 				f.parts[i].value = strings.TrimRight(string(b), "\n")
 			}
 			in.Text = f.parts[i].value
-			hasPlaceholders = !f.literal && eg2.HasPlaceholders(in.Text)
+			hasPlaceholders = !f.Literal && eg2.HasPlaceholders(in.Text)
 		default:
 			kind := map[string]eg2.MediaKind{"image": eg2.MediaImage, "audio": eg2.MediaAudio, "video": eg2.MediaVideo}[p.kind]
 			in.Media = append(in.Media, eg2.Media{Kind: kind, Path: p.value})
 		}
 	}
-	if hasPlaceholders || f.literal {
+	if hasPlaceholders || f.Literal {
 		return in, nil
 	}
 	var b strings.Builder
