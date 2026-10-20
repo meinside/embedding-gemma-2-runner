@@ -5,12 +5,13 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
 	"syscall"
+
+	flags "github.com/jessevdk/go-flags"
 
 	eg2 "github.com/meinside/embedding-gemma-2-runner"
 	"github.com/meinside/embedding-gemma-2-runner/internal/assets"
@@ -24,8 +25,38 @@ const (
 	exitStopped = 130
 )
 
-// errUsage marks errors that are the caller's to fix; the usage is printed.
+// errUsage marks errors that are the caller's to fix.
 var errUsage = errors.New("usage")
+
+// options are the commands and their flags; go-flags reads them from the
+// tags. Short letters go to the flags typed most (-t is --task); -v is
+// verbose, as usual.
+type options struct {
+	Embed embedCmd `command:"embed" description:"print embeddings as JSON" long-description:"Each FILE is one input: an image, audio or video file, or a text file.\n--text and the media options together make one more input.\nSee \"eg2 help inputs\" for placeholders and tasks."`
+	Serve serveCmd `command:"serve" description:"OpenAI-compatible embeddings server" long-description:"Serves POST /v1/embeddings (OpenAI-compatible, plus media inputs), GET /v1/models,\nGET /health, and GET / with the input guide. Requests run one at a time."`
+	Setup setupCmd `command:"setup" description:"download the model and libraries now" long-description:"Downloads the llama.cpp libraries and the text model, so later runs need no\nnetwork. Images, audio and video also need --media. --prune instead removes\nwhat the cache holds for other versions."`
+	Info  infoCmd  `command:"info" description:"show versions, cache paths and what is installed"`
+	Help  helpCmd  `command:"help" description:"this list; \"help inputs\": what an input can be"`
+}
+
+type helpCmd struct {
+	Args struct {
+		Topic string `positional-arg-name:"TOPIC"`
+	} `positional-args:"yes"`
+}
+
+// common holds the flags every command that opens the model shares.
+type common struct {
+	Cache     string `long:"cache" value-name:"DIR" description:"cache for models and libraries"`
+	Device    string `long:"device" default:"auto" choice:"auto" choice:"cpu" choice:"gpu" description:"where the model runs"`
+	Processor string `long:"processor" value-name:"NAME" description:"llama.cpp build to use (default: picked for this machine)"`
+	Lib       string `long:"lib" value-name:"DIR" description:"use the llama.cpp libraries in DIR instead of downloading them"`
+	Weights   string `long:"weights" default:"q8_0" choice:"q8_0" choice:"bf16" description:"bf16 is for parity checks"`
+	Offline   bool   `long:"offline" description:"fail instead of downloading anything"`
+	Threads   int    `long:"threads" value-name:"N" description:"CPU threads (0: llama.cpp default)"`
+	Batch     int    `long:"batch" value-name:"N" description:"embed up to N text inputs in one pass; 1 is one at a time (default: 32 on a GPU, where the vectors are the same either way; 1 on the CPU, whose vectors would differ by about 3e-4 cosine)"`
+	Verbose   bool   `short:"v" long:"verbose" description:"show llama.cpp logs"`
+}
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -34,37 +65,72 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	if len(args) == 0 {
-		usage(stderr)
+	return runWith(ctx, args, stdin, stdout, stderr, nil)
+}
+
+// runWith is run with the parsed options handed to parsed instead of the
+// command, for tests of the option syntax.
+func runWith(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, parsed func(*options) error) int {
+	var o options
+	o.Embed.init()
+	p := flags.NewNamedParser("eg2", flags.Default&^flags.PrintErrors)
+	p.LongDescription = "eg2 embeds text, images, audio and video with EmbeddingGemma 2."
+	if _, err := p.AddGroup("Commands", "", &o); err != nil {
+		panic(err) // a tag is wrong: a programming error
+	}
+	if opt := p.Find("embed").FindOptionByLongName("task"); opt != nil {
+		opt.Description += ": " + taskList()
+	}
+	if _, err := p.ParseArgs(args); err != nil {
+		var fe *flags.Error
+		if !errors.As(err, &fe) {
+			fmt.Fprintln(stderr, "eg2:", err)
+			return exitUsage
+		}
+		switch fe.Type {
+		case flags.ErrHelp:
+			fmt.Fprintln(stdout, fe.Message)
+			fmt.Fprintln(stdout)
+			printCacheDirs(stdout, "")
+			return exitOK
+		case flags.ErrCommandRequired:
+			p.WriteHelp(stderr)
+			fmt.Fprintln(stderr)
+			printCacheDirs(stderr, "")
+			return exitUsage
+		}
+		fmt.Fprintln(stderr, "eg2:", fe.Message)
 		return exitUsage
 	}
-	cmd, rest := args[0], args[1:]
+
 	var err error
-	switch cmd {
-	case "embed":
-		err = runEmbed(ctx, rest, stdin, stdout, stderr)
-	case "serve":
-		err = runServe(ctx, rest, stderr)
-	case "setup":
-		err = runSetup(ctx, rest, stdout, stderr)
-	case "info":
-		err = runInfo(rest, stdout, stderr)
-	case "help", "-h", "-help", "--help":
-		if len(rest) > 0 && rest[0] == "inputs" {
+	switch {
+	case parsed != nil:
+		err = parsed(&o)
+	case p.Active.Name == "embed":
+		err = runEmbed(ctx, &o.Embed, stdin, stdout, stderr)
+	case p.Active.Name == "serve":
+		err = runServe(ctx, &o.Serve, stderr)
+	case p.Active.Name == "setup":
+		err = runSetup(ctx, &o.Setup, stdin, stdout, stderr)
+	case p.Active.Name == "info":
+		err = runInfo(&o.Info, stdout)
+	case p.Active.Name == "help":
+		switch o.Help.Args.Topic {
+		case "inputs":
 			printInputsHelp(stdout)
-			return exitOK
+		case "":
+			p.WriteHelp(stdout)
+			fmt.Fprintln(stdout)
+			printCacheDirs(stdout, "")
+		default:
+			fmt.Fprintf(stderr, "eg2: no help topic %q; there is \"eg2 help inputs\"\n", o.Help.Args.Topic)
+			return exitUsage
 		}
-		usage(stdout)
 		return exitOK
-	default:
-		fmt.Fprintf(stderr, "eg2: unknown command %q\n\n", cmd)
-		usage(stderr)
-		return exitUsage
 	}
 	switch {
 	case err == nil:
-		return exitOK
-	case errors.Is(err, flag.ErrHelp):
 		return exitOK
 	case errors.Is(err, errUsage):
 		fmt.Fprintln(stderr, "eg2:", err)
@@ -79,22 +145,6 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	return exitFailed
 }
 
-func usage(w io.Writer) {
-	fmt.Fprint(w, `eg2 embeds text, images, audio and video with EmbeddingGemma 2.
-
-Usage:
-  eg2 embed [flags] [FILE...]   print embeddings as JSON
-  eg2 serve [flags]             OpenAI-compatible embeddings server
-  eg2 setup [flags]             download the model and libraries now
-  eg2 info [flags]              show versions, cache paths and what is installed
-  eg2 help inputs               what an input can be: media, placeholders, tasks
-
-Run "eg2 COMMAND -h" for the flags of a command.
-
-`)
-	printCacheDirs(w, "")
-}
-
 // printCacheDirs shows where downloads go, for usage and help output.
 func printCacheDirs(w io.Writer, cacheDir string) {
 	d, err := eg2.CacheDirs(cacheDir)
@@ -102,7 +152,7 @@ func printCacheDirs(w io.Writer, cacheDir string) {
 		fmt.Fprintf(w, "Cache: unknown (%v)\n", err)
 		return
 	}
-	fmt.Fprintf(w, "Cache ($XDG_CACHE_HOME/eg2 when set, else the OS cache directory; -cache moves it):\n")
+	fmt.Fprintf(w, "Cache ($XDG_CACHE_HOME/eg2 when set, else the OS cache directory; --cache moves it):\n")
 	fmt.Fprintf(w, "  models     %s\n", assets.ModelDir(d))
 	fmt.Fprintf(w, "  libraries  %s\n", d.Libs)
 	if d.Libffi != "" {
@@ -110,74 +160,19 @@ func printCacheDirs(w io.Writer, cacheDir string) {
 	}
 }
 
-// common holds the flags every command that opens the model shares.
-type common struct {
-	cacheDir  string
-	device    string
-	processor string
-	libDir    string
-	weights   string
-	offline   bool
-	threads   int
-	verbose   bool
-}
-
-func (c *common) register(fs *flag.FlagSet) {
-	fs.StringVar(&c.cacheDir, "cache", "", "cache `dir` for models and libraries")
-	fs.StringVar(&c.device, "device", "auto", "auto, cpu or gpu")
-	fs.StringVar(&c.processor, "processor", "", "llama.cpp build to use (default: picked for this machine)")
-	fs.StringVar(&c.libDir, "lib", "", "use the llama.cpp libraries in `dir` instead of downloading them")
-	fs.StringVar(&c.weights, "weights", "q8_0", "q8_0, or bf16 for parity checks")
-	fs.BoolVar(&c.offline, "offline", false, "fail instead of downloading anything")
-	fs.IntVar(&c.threads, "threads", 0, "CPU threads (0: llama.cpp default)")
-	fs.BoolVar(&c.verbose, "v", false, "show llama.cpp logs")
-}
-
-func (c *common) options(stderr io.Writer) (eg2.Options, error) {
-	dev, ok := map[string]eg2.Device{"auto": eg2.DeviceAuto, "cpu": eg2.DeviceCPU, "gpu": eg2.DeviceGPU}[c.device]
-	if !ok {
-		return eg2.Options{}, fmt.Errorf("%w: -device %q: want auto, cpu or gpu", errUsage, c.device)
-	}
+func (c *common) options(stderr io.Writer) eg2.Options {
 	return eg2.Options{
-		CacheDir:  c.cacheDir,
-		Device:    dev,
-		Processor: c.processor,
-		LibDir:    c.libDir,
-		Weights:   c.weights,
-		Offline:   c.offline,
-		Threads:   c.threads,
-		Verbose:   c.verbose,
+		CacheDir:  c.Cache,
+		Device:    map[string]eg2.Device{"auto": eg2.DeviceAuto, "cpu": eg2.DeviceCPU, "gpu": eg2.DeviceGPU}[c.Device],
+		Processor: c.Processor,
+		LibDir:    c.Lib,
+		Weights:   c.Weights,
+		Offline:   c.Offline,
+		Threads:   c.Threads,
+		BatchSeqs: c.Batch,
+		Verbose:   c.Verbose,
 		Progress:  progressPrinter(stderr),
-	}, nil
-}
-
-// newFlagSet returns a flag set whose -h output ends with the cache paths.
-func newFlagSet(name, synopsis string, stderr io.Writer, c *common) *flag.FlagSet {
-	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.Usage = func() {
-		fmt.Fprintf(stderr, "Usage: eg2 %s\n\nFlags:\n", synopsis)
-		fs.PrintDefaults()
-		fmt.Fprintln(stderr)
-		cacheDir := ""
-		if c != nil {
-			cacheDir = c.cacheDir
-		}
-		printCacheDirs(stderr, cacheDir)
 	}
-	return fs
-}
-
-// parseFlags parses args and maps a bad flag to errUsage (the flag package
-// has already printed why).
-func parseFlags(fs *flag.FlagSet, args []string) error {
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return err
-		}
-		return fmt.Errorf("%w: %v", errUsage, err)
-	}
-	return nil
 }
 
 // progressPrinter reports downloads on stderr, keeping stdout for results.

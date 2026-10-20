@@ -2,12 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"image"
 	"image/png"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	eg2 "github.com/meinside/embedding-gemma-2-runner"
 )
@@ -39,7 +43,7 @@ func TestCombinedInput(t *testing.T) {
 			literal: true, wantText: "<|image|>", wantMedia: 1},
 	}
 	for _, tt := range tests {
-		f := embedFlags{parts: tt.parts, task: tt.task, literal: tt.literal}
+		f := embedCmd{parts: tt.parts, Task: tt.task, Literal: tt.literal}
 		in, err := f.combinedInput(nil)
 		if err != nil {
 			t.Fatalf("%s: %v", tt.name, err)
@@ -123,5 +127,94 @@ func TestUsageShowsCacheDirs(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("help lacks %q:\n%s", want, out.String())
 		}
+	}
+}
+
+func TestSetupPrune(t *testing.T) {
+	cache := t.TempDir()
+	old := filepath.Join(cache, "lib", "v0.0.1")
+	if err := os.MkdirAll(old, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(stdin string, extra ...string) string {
+		t.Helper()
+		var out, errOut bytes.Buffer
+		args := append([]string{"setup", "--cache", cache, "--prune"}, extra...)
+		if code := run(context.Background(), args, strings.NewReader(stdin), &out, &errOut); code != exitOK {
+			t.Fatalf("%v: exit %d\n%s", args, code, errOut.String())
+		}
+		return out.String()
+	}
+	if out := run("n\n"); !strings.Contains(out, old) || !strings.Contains(out, "nothing removed") {
+		t.Errorf("answer n:\n%s", out)
+	}
+	if _, err := os.Stat(old); err != nil {
+		t.Fatal("removed after answering n")
+	}
+	if out := run("", "-y"); !strings.Contains(out, "removed "+old) {
+		t.Errorf("-y:\n%s", out)
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Error("not removed with -y")
+	}
+	if out := run("y\n"); !strings.Contains(out, "nothing to remove") {
+		t.Errorf("second run:\n%s", out)
+	}
+}
+
+// The option syntax: short and long names, values, order, and the errors.
+func TestParseArgs(t *testing.T) {
+	parse := func(args ...string) (*options, int, string) {
+		t.Helper()
+		var errOut bytes.Buffer
+		var got *options
+		code := runWith(context.Background(), args, nil, io.Discard, &errOut, func(o *options) error {
+			got = o
+			return nil
+		})
+		return got, code, errOut.String()
+	}
+	o, code, _ := parse("embed", "--image", "a.jpg", "--text", "cap", "--video", "v.mp4", "--image", "b.png", "-d", "256", "-lv", "-t", "document", "f1", "f2")
+	if code != exitOK {
+		t.Fatal("parse failed")
+	}
+	if got := fmt.Sprint(o.Embed.parts); got != "[{image a.jpg} {text cap} {video v.mp4} {image b.png}]" {
+		t.Errorf("parts in order: %s", got)
+	}
+	if o.Embed.Dim != 256 || !o.Embed.Literal || !o.Embed.Common.Verbose || o.Embed.Task != "document" || fmt.Sprint(o.Embed.Args.Files) != "[f1 f2]" {
+		t.Errorf("flags: %+v", o.Embed)
+	}
+	if _, code, msg := parse("embed", "--format", "xml", "x"); code != exitUsage || !strings.Contains(msg, "xml") {
+		t.Errorf("bad choice: %d %q", code, msg)
+	}
+	if _, code, msg := parse("embed", "--text", "a", "--text", "b"); code != exitUsage || !strings.Contains(msg, "given twice") {
+		t.Errorf("text twice: %d %q", code, msg)
+	}
+	if _, code, msg := parse(); code != exitUsage || !strings.Contains(msg, "Usage") {
+		t.Errorf("no command: %d %q", code, msg)
+	}
+	if o, code, _ := parse("serve", "-a", ":9000", "-m", "--max-audio", "90s"); code != exitOK || o.Serve.Addr != ":9000" || !o.Serve.Media || o.Serve.MaxAudio != 90*time.Second {
+		t.Errorf("serve: %d %+v", code, o.Serve)
+	}
+	t.Setenv("EG2_API_KEY", "fromenv")
+	if o, _, _ := parse("serve"); o.Serve.APIKey != "fromenv" {
+		t.Errorf("api key from the environment: %q", o.Serve.APIKey)
+	}
+}
+
+func TestHelpOutput(t *testing.T) {
+	for _, args := range [][]string{{"-h"}, {"--help"}, {"embed", "-h"}, {"help"}} {
+		var out, errOut bytes.Buffer
+		if code := run(context.Background(), args, nil, &out, &errOut); code != exitOK {
+			t.Errorf("%v: exit %d\n%s", args, code, errOut.String())
+		}
+		if !strings.Contains(out.String(), "Usage") || !strings.Contains(out.String(), "models") {
+			t.Errorf("%v: help without usage and cache paths:\n%s", args, out.String())
+		}
+	}
+	var out bytes.Buffer
+	run(context.Background(), []string{"help", "inputs"}, nil, &out, io.Discard)
+	if !strings.Contains(out.String(), "<|image|>") {
+		t.Errorf("help inputs:\n%s", out.String())
 	}
 }

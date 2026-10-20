@@ -16,7 +16,7 @@ Only what the code and README do not tell you.
 
 ## Agent sandbox on this machine
 
-- Metal cannot initialize inside the sandbox, so `-device auto` lands on the CPU there;
+- Metal cannot initialize inside the sandbox, so `--device auto` lands on the CPU there;
   that says nothing about the GPU path. Ask the user to run GPU checks.
 - Hugging Face CDN downloads fail (403); GitHub downloads work. The reference script and a
   fresh model download need the user. `EG2_SEED_DIR` / `Options.SeedDir` can copy the GGUFs

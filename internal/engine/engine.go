@@ -38,19 +38,24 @@ type Options struct {
 	Device    Device
 	Threads   int // 0: llama.cpp default
 	MaxTokens int // tokens per input, at most the model's 8192
-	Quiet     bool
+	// NSeqMax is how many texts EmbedTexts may put in one forward pass; 1
+	// is one at a time, 0 picks DefaultSeqs for the device.
+	NSeqMax int
+	Quiet   bool
 }
 
 type Engine struct {
 	model     llama.Model
 	lctx      llama.Context
 	mctx      mtmd.Context
-	gpu       bool
+	gpu       bool // the text model runs on the GPU
+	mmGPU     bool // the encoders do
 	gpuName   string
 	threads   int
 	nEmbdInp  int32
 	nEmbdOut  int32
 	maxTokens int
+	nSeqMax   int
 }
 
 // Embedding is one pooled, unnormalized output vector.
@@ -153,7 +158,7 @@ func open(o Options, gpu bool) (*Engine, error) {
 		return nil, fmt.Errorf("load %s: %w", o.TextModel, err)
 	}
 	e := &Engine{
-		model: model, gpu: gpu, threads: o.Threads, maxTokens: o.MaxTokens,
+		model: model, gpu: gpu, threads: o.Threads, maxTokens: o.MaxTokens, nSeqMax: defaultSeqs(o.NSeqMax, gpu),
 		nEmbdInp: llama.ModelNEmbdInp(model), nEmbdOut: llama.ModelNEmbdOut(model),
 	}
 
@@ -161,6 +166,7 @@ func open(o Options, gpu bool) (*Engine, error) {
 	n := uint32(o.MaxTokens)
 	// The encoder needs the whole input in one physical batch (n_ubatch).
 	cp.NCtx, cp.NBatch, cp.NUbatch = n, n, n
+	cp.NSeqMax = uint32(e.nSeqMax)
 	cp.Embeddings = 1
 	cp.PoolingType = llama.PoolingTypeMean
 	if o.Threads > 0 {
@@ -175,6 +181,24 @@ func open(o Options, gpu bool) (*Engine, error) {
 	}
 	return e, nil
 }
+
+// defaultSeqs resolves Options.NSeqMax. On a GPU batching gives the same
+// vectors and short texts went 2.5 times faster at 8 a pass, 2.7 at 16 and
+// 2.8 at 32 on an M1 Pro; the token budget per batch stays n_batch. The
+// CPU kernels round differently for other batch shapes, so there it stays
+// off unless asked.
+func defaultSeqs(n int, gpu bool) int {
+	switch {
+	case n > 0:
+		return n
+	case gpu:
+		return 32
+	}
+	return 1
+}
+
+// NSeqMax is how many texts EmbedTexts puts in one forward pass.
+func (e *Engine) NSeqMax() int { return e.nSeqMax }
 
 // LoadMMProj loads the vision and audio encoders. On a GPU engine it tries the
 // GPU first, then the CPU.
@@ -195,7 +219,7 @@ func (e *Engine) LoadMMProj(path string) error {
 		if err != nil {
 			return fmt.Errorf("load %s: %w", path, err)
 		}
-		e.mctx = ctx
+		e.mctx, e.mmGPU = ctx, gpu
 		return nil
 	}
 	if e.gpu {
@@ -204,6 +228,18 @@ func (e *Engine) LoadMMProj(path string) error {
 		}
 	}
 	return try(false)
+}
+
+// MediaDevice describes where the encoders run, "" before they are loaded.
+// On a GPU engine they can still land on the CPU when their GPU load fails.
+func (e *Engine) MediaDevice() string {
+	switch {
+	case e.mctx == 0:
+		return ""
+	case e.mmGPU:
+		return e.gpuName
+	}
+	return "CPU"
 }
 
 // HasMMProj reports whether LoadMMProj succeeded.
@@ -252,6 +288,101 @@ func (e *Engine) EmbedText(text string, parseSpecial bool) (Embedding, error) {
 	}
 	vec, err := e.forward(batch)
 	return Embedding{Vec: vec, Tokens: len(toks)}, err
+}
+
+// TextInput is one text for EmbedTexts.
+type TextInput struct {
+	Text         string
+	ParseSpecial bool
+}
+
+// EmbedTexts embeds texts, up to NSeqMax of them per forward pass as long as
+// their tokens fit one batch. Results align with texts; errs[i] is set for a
+// text that failed (too long, or its pass failed). On a GPU the vectors
+// equal EmbedText's; the CPU kernels round differently for other batch
+// shapes, within about 3e-4 cosine.
+func (e *Engine) EmbedTexts(texts []TextInput) (out []Embedding, errs []error) {
+	vocab := llama.ModelGetVocab(e.model)
+	out, errs = make([]Embedding, len(texts)), make([]error, len(texts))
+	toks := make([][]llama.Token, len(texts))
+	lens := make([]int, len(texts))
+	for i, t := range texts {
+		toks[i] = llama.Tokenize(vocab, t.Text, true, t.ParseSpecial)
+		lens[i] = len(toks[i])
+		if errs[i] = e.checkLen(lens[i]); errs[i] != nil {
+			lens[i] = -1
+		}
+	}
+	for _, g := range groups(lens, e.nSeqMax, e.maxTokens) {
+		seqs := make([][]llama.Token, len(g))
+		for s, i := range g {
+			seqs[s] = toks[i]
+		}
+		vecs, err := e.forwardSeqs(seqs)
+		for s, i := range g {
+			if err != nil {
+				errs[i] = err
+				continue
+			}
+			out[i] = Embedding{Vec: vecs[s], Tokens: lens[i]}
+		}
+	}
+	return out, errs
+}
+
+// groups splits the indexes of lens into runs of at most maxSeq entries
+// whose lengths sum to at most maxTokens, in order. Negative lengths are
+// left out.
+func groups(lens []int, maxSeq, maxTokens int) [][]int {
+	var out [][]int
+	var cur []int
+	sum := 0
+	for i, n := range lens {
+		if n < 0 {
+			continue
+		}
+		if len(cur) > 0 && (len(cur) >= maxSeq || sum+n > maxTokens) {
+			out = append(out, cur)
+			cur, sum = nil, 0
+		}
+		cur = append(cur, i)
+		sum += n
+	}
+	if len(cur) > 0 {
+		out = append(out, cur)
+	}
+	return out
+}
+
+// forwardSeqs runs one batch holding one sequence per entry of seqs and
+// returns their pooled vectors.
+func (e *Engine) forwardSeqs(seqs [][]llama.Token) ([][]float32, error) {
+	batch, err := llama.BatchExtInit(e.lctx)
+	if err != nil {
+		return nil, err
+	}
+	defer llama.BatchExtFree(batch)
+	for s, ts := range seqs {
+		for p, t := range ts {
+			idx, err := llama.BatchExtAddToken(batch, llama.SeqId(s), t)
+			if err != nil {
+				return nil, err
+			}
+			if err := finishEntry(batch, idx, llama.Pos(p)); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if err := e.process(batch); err != nil {
+		return nil, err
+	}
+	out := make([][]float32, len(seqs))
+	for s := range seqs {
+		if out[s], err = e.pooled(llama.SeqId(s)); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // EmbedMixed embeds text in which each Marker stands for the next part, in order.
@@ -397,20 +528,33 @@ func finishEntry(batch llama.BatchExt, idx int32, pos llama.Pos) error {
 	return llama.BatchExtSetOutputEmbd(batch, idx, true)
 }
 
+// forward runs a batch holding sequence 0 and returns its pooled vector.
 func (e *Engine) forward(batch llama.BatchExt) ([]float32, error) {
-	ret, err := llama.Process(e.lctx, llama.ProcessTypeEncode, batch)
-	if err != nil {
+	if err := e.process(batch); err != nil {
 		return nil, err
 	}
-	if ret != 0 {
-		return nil, fmt.Errorf("llama_process returned %d", ret)
+	return e.pooled(0)
+}
+
+func (e *Engine) process(batch llama.BatchExt) error {
+	ret, err := llama.Process(e.lctx, llama.ProcessTypeEncode, batch)
+	if err != nil {
+		return err
 	}
-	raw, err := llama.GetEmbeddingsSeq(e.lctx, 0, e.nEmbdOut)
+	if ret != 0 {
+		return fmt.Errorf("llama_process returned %d", ret)
+	}
+	return nil
+}
+
+// pooled returns a copy of the pooled vector of seq after process.
+func (e *Engine) pooled(seq llama.SeqId) ([]float32, error) {
+	raw, err := llama.GetEmbeddingsSeq(e.lctx, seq, e.nEmbdOut)
 	if err != nil {
 		return nil, err
 	}
 	if raw == nil {
-		return nil, errors.New("no pooled embedding for sequence 0")
+		return nil, fmt.Errorf("no pooled embedding for sequence %d", seq)
 	}
 	for _, x := range raw {
 		if math.IsNaN(float64(x)) || math.IsInf(float64(x), 0) {

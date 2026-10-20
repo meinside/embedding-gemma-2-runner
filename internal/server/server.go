@@ -15,11 +15,9 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
-	"os"
 	"time"
 
 	eg2 "github.com/meinside/embedding-gemma-2-runner"
-	"github.com/meinside/embedding-gemma-2-runner/internal/media"
 )
 
 // ModelID is the model name the API reports. Requests may name any model:
@@ -41,13 +39,22 @@ type Options struct {
 	APIKey    string
 	MaxBody   int64 // bytes per request
 	MaxInputs int   // inputs per request
-	// MaxAudio, if set, rejects audio longer than this, read from its
-	// headers before anything is decoded: mtmd decodes a file whole, and a
-	// long low-bitrate MP3 takes gigabytes. The model itself takes about
-	// five minutes at most (25 tokens a second, 8192 tokens).
+	// MaxAudio and MaxVideo, if set, reject longer media before anything is
+	// decoded (eg2.MediaDuration). mtmd decodes audio whole, so a long
+	// low-bitrate MP3 takes gigabytes; ffmpeg decodes a video whole to pick
+	// its 32 frames. The model itself takes about five minutes of audio at
+	// most (25 tokens a second, 8192 tokens).
 	MaxAudio time.Duration
-	Help     string
-	Logger   *slog.Logger
+	MaxVideo time.Duration
+	// CORSOrigin, if set, lets browser pages from this origin ("*" for any)
+	// call the API: it answers preflight requests and names the origin in
+	// the responses.
+	CORSOrigin string
+	// BatchTexts hands consecutive text-only inputs of a request to one
+	// Embed call, for an Embedder opened with eg2.Options.BatchSeqs.
+	BatchTexts bool
+	Help       string
+	Logger     *slog.Logger
 }
 
 type server struct {
@@ -72,7 +79,31 @@ func New(e Embedder, o Options) http.Handler {
 	mux.HandleFunc("GET /v1/models", s.auth(s.models))
 	mux.HandleFunc("GET /health", s.health)
 	mux.HandleFunc("GET /{$}", s.help)
-	return s.logged(mux)
+	var h http.Handler = mux
+	if o.CORSOrigin != "" {
+		h = s.cors(h)
+	}
+	return s.logged(h)
+}
+
+// cors adds the headers a browser needs and answers its preflight requests,
+// which carry no credentials and so come before auth.
+func (s *server) cors(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Access-Control-Allow-Origin", s.opts.CORSOrigin)
+		if s.opts.CORSOrigin != "*" {
+			h.Add("Vary", "Origin")
+		}
+		if r.Method == http.MethodOptions {
+			h.Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			h.Set("Access-Control-Max-Age", "86400")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 type request struct {
@@ -136,17 +167,24 @@ func (s *server) embeddings(w http.ResponseWriter, r *http.Request) {
 
 	inputs, err := s.parseInputs(req)
 	if err == nil {
-		err = s.checkAudio(inputs)
+		err = s.checkMedia(r.Context(), inputs)
 	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error(), "input")
 		return
 	}
 	resp := response{Object: "list", Model: ModelID, Data: make([]embedding, len(inputs))}
-	for i, in := range inputs {
+	for i := 0; i < len(inputs); {
 		// One at a time: the request is all or nothing, as OpenAI's is, so
-		// the inputs after a failing one are not embedded for nothing.
-		results, err := s.emb.Embed(r.Context(), in)
+		// the inputs after a failing one are not embedded for nothing. With
+		// BatchTexts a run of text-only inputs goes together.
+		j := i + 1
+		if s.opts.BatchTexts && len(inputs[i].Media) == 0 {
+			for j < len(inputs) && len(inputs[j].Media) == 0 {
+				j++
+			}
+		}
+		results, err := s.emb.Embed(r.Context(), inputs[i:j]...)
 		if err != nil {
 			if r.Context().Err() != nil {
 				return // client went away
@@ -154,22 +192,25 @@ func (s *server) embeddings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error(), "")
 			return
 		}
-		res := results[0]
-		if res.Err != nil {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("input[%d]: %v", i, res.Err), "input")
-			return
+		for k, res := range results {
+			idx := i + k
+			if res.Err != nil {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("input[%d]: %v", idx, res.Err), "input")
+				return
+			}
+			vec, err := eg2.Truncate(res.Embedding, dim)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, fmt.Sprintf("input[%d]: %v", idx, err), "")
+				return
+			}
+			var out any = vec
+			if req.EncodingFormat == "base64" {
+				out = encodeBase64(vec)
+			}
+			resp.Data[idx] = embedding{Object: "embedding", Index: idx, Embedding: out}
+			resp.Usage.PromptTokens += res.Tokens
 		}
-		vec, err := eg2.Truncate(res.Embedding, dim)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("input[%d]: %v", i, err), "")
-			return
-		}
-		var out any = vec
-		if req.EncodingFormat == "base64" {
-			out = encodeBase64(vec)
-		}
-		resp.Data[i] = embedding{Object: "embedding", Index: i, Embedding: out}
-		resp.Usage.PromptTokens += res.Tokens
+		i = j
 	}
 	resp.Usage.TotalTokens = resp.Usage.PromptTokens
 	writeJSON(w, http.StatusOK, resp)
@@ -214,48 +255,26 @@ func (s *server) parseInputs(req request) ([]eg2.Input, error) {
 	return inputs, nil
 }
 
-// audioHead is how much of an audio file on disk is read for its duration:
-// room for an ID3 tag with cover art before the first MP3 frame.
-const audioHead = 1 << 20
-
-// checkAudio rejects audio inputs longer than MaxAudio.
-func (s *server) checkAudio(inputs []eg2.Input) error {
-	if s.opts.MaxAudio <= 0 {
-		return nil
-	}
+// checkMedia rejects audio and video inputs longer than MaxAudio and MaxVideo.
+func (s *server) checkMedia(ctx context.Context, inputs []eg2.Input) error {
+	limits := map[eg2.MediaKind]time.Duration{eg2.MediaAudio: s.opts.MaxAudio, eg2.MediaVideo: s.opts.MaxVideo}
 	for i, in := range inputs {
 		for j, m := range in.Media {
-			if m.Kind != eg2.MediaAudio {
+			limit := limits[m.Kind]
+			if limit <= 0 {
 				continue
 			}
-			head, size := m.Data, int64(len(m.Data))
-			if m.Data == nil {
-				var err error
-				if head, size, err = readHead(m.Path, audioHead); err != nil {
-					return fmt.Errorf("input[%d]: %w", i, err)
-				}
+			d, ok, err := eg2.MediaDuration(ctx, m)
+			if err != nil {
+				return fmt.Errorf("input[%d]: %s %d: %w", i, m.Kind, j+1, err)
 			}
-			if d, ok := media.AudioDuration(head, size); ok && d > s.opts.MaxAudio {
-				return fmt.Errorf("input[%d]: audio %d is %s long, more than the %s allowed",
-					i, j+1, d.Round(time.Second), s.opts.MaxAudio)
+			if ok && d > limit {
+				return fmt.Errorf("input[%d]: %s %d is %s long, more than the %s allowed",
+					i, m.Kind, j+1, d.Round(time.Second), limit)
 			}
 		}
 	}
 	return nil
-}
-
-func readHead(path string, n int64) ([]byte, int64, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, 0, err
-	}
-	head, err := io.ReadAll(io.LimitReader(f, n))
-	return head, fi.Size(), err
 }
 
 // encodeBase64 is OpenAI's base64 format: little-endian float32s.
@@ -282,6 +301,7 @@ func (s *server) health(w http.ResponseWriter, _ *http.Request) {
 		"weights":      info.Weights,
 		"device":       info.Device,
 		"media_loaded": info.MediaLoaded,
+		"media_device": info.MediaDevice,
 		"video":        info.FFmpeg,
 	})
 }

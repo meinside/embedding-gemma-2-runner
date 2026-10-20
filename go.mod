@@ -4,6 +4,7 @@ go 1.27.2
 
 require (
 	github.com/hybridgroup/yzma v1.30.0
+	github.com/jessevdk/go-flags v1.6.1
 	golang.org/x/image v0.47.0
 )
 

@@ -6,9 +6,13 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,10 +22,14 @@ import (
 
 // fake embeds every input as a unit vector along axis 0, and fails inputs
 // whose text is "fail".
-type fake struct{ got []eg2.Input }
+type fake struct {
+	got   []eg2.Input
+	calls []int // inputs per Embed call
+}
 
 func (f *fake) Embed(_ context.Context, in ...eg2.Input) ([]eg2.Result, error) {
 	f.got = append(f.got, in...)
+	f.calls = append(f.calls, len(in))
 	out := make([]eg2.Result, len(in))
 	for i, x := range in {
 		if x.Text == "fail" {
@@ -189,5 +197,72 @@ func TestMaxAudio(t *testing.T) {
 	}
 	if rec := post(t, New(&fake{}, Options{}), long); rec.Code != http.StatusOK {
 		t.Errorf("1 hour of audio without a limit: %d %s; want 200", rec.Code, rec.Body)
+	}
+}
+
+func TestMaxVideo(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("needs ffmpeg")
+	}
+	clip := filepath.Join(t.TempDir(), "clip.mp4")
+	if out, err := exec.Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=red:s=64x64:d=3:r=5",
+		"-pix_fmt", "yuv420p", clip).CombinedOutput(); err != nil {
+		t.Fatalf("ffmpeg: %v\n%s", err, out)
+	}
+	body := `{"input":{"video":` + strconv.Quote(clip) + `}}`
+	h := New(&fake{}, Options{AllowLocalFiles: true, MaxVideo: time.Second})
+	if rec := post(t, h, body); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "video 1 is 3s long") {
+		t.Errorf("3 s of video: %d %s; want 400", rec.Code, rec.Body)
+	}
+	h = New(&fake{}, Options{AllowLocalFiles: true, MaxVideo: 5 * time.Second})
+	if rec := post(t, h, body); rec.Code != http.StatusOK {
+		t.Errorf("3 s of video under the limit: %d %s; want 200", rec.Code, rec.Body)
+	}
+}
+
+func TestCORS(t *testing.T) {
+	h := New(&fake{}, Options{APIKey: "k", CORSOrigin: "https://app.example"})
+	req := httptest.NewRequest("OPTIONS", "/v1/embeddings", nil)
+	req.Header.Set("Origin", "https://app.example")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent || rec.Header().Get("Access-Control-Allow-Origin") != "https://app.example" ||
+		!strings.Contains(rec.Header().Get("Access-Control-Allow-Headers"), "Authorization") {
+		t.Errorf("preflight: %d %v", rec.Code, rec.Header())
+	}
+	if rec := post(t, h, `{"input":"a"}`, "Authorization", "Bearer k"); rec.Code != http.StatusOK ||
+		rec.Header().Get("Access-Control-Allow-Origin") != "https://app.example" || rec.Header().Get("Vary") != "Origin" {
+		t.Errorf("response: %d %v", rec.Code, rec.Header())
+	}
+	plain := New(&fake{}, Options{})
+	rec = httptest.NewRecorder()
+	plain.ServeHTTP(rec, httptest.NewRequest("OPTIONS", "/v1/embeddings", nil))
+	if rec.Code == http.StatusNoContent || rec.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Errorf("without the option: %d %v", rec.Code, rec.Header())
+	}
+}
+
+// With BatchTexts, consecutive text-only inputs go to Embed together; media
+// inputs still go alone.
+func TestBatchTexts(t *testing.T) {
+	body := `{"input":["a","b",{"image":"data:image/png;base64,aGk="},"c","d","e"]}`
+	f := &fake{}
+	if rec := post(t, New(f, Options{BatchTexts: true}), body); rec.Code != http.StatusOK {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	if got := fmt.Sprint(f.calls); got != "[2 1 3]" {
+		t.Errorf("Embed calls of %s inputs, want [2 1 3]", got)
+	}
+	var resp response
+	json.Unmarshal(post(t, New(&fake{}, Options{BatchTexts: true}), body).Body.Bytes(), &resp)
+	for i, d := range resp.Data {
+		if d.Index != i {
+			t.Errorf("data[%d] has index %d", i, d.Index)
+		}
+	}
+	f = &fake{}
+	post(t, New(f, Options{}), body)
+	if got := fmt.Sprint(f.calls); got != "[1 1 1 1 1 1]" {
+		t.Errorf("without BatchTexts: Embed calls of %s inputs", got)
 	}
 }

@@ -1,10 +1,15 @@
 package eg2
 
 import (
+	"context"
 	"math"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/meinside/embedding-gemma-2-runner/internal/media"
 )
 
 func TestPrefix(t *testing.T) {
@@ -173,5 +178,31 @@ func TestHasText(t *testing.T) {
 		if got := tt.in.HasText(); got != tt.want {
 			t.Errorf("%+v: got %v", tt.in, got)
 		}
+	}
+}
+
+// A video file that cannot be read says why, instead of being handed to the
+// audio decoder and reported as unsupported audio.
+func TestResolveKindVideoErrors(t *testing.T) {
+	dir := t.TempDir()
+	mp4 := filepath.Join(dir, "clip.mp4")
+	if err := os.WriteFile(mp4, []byte("not a video"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if media.FFmpegAvailable() {
+		if _, err := resolveKind(context.Background(), Media{Path: mp4}); err == nil || !strings.Contains(err.Error(), "not a video") {
+			t.Errorf("junk .mp4 with ffmpeg: %v", err)
+		}
+	}
+	t.Setenv("PATH", dir) // no ffmpeg
+	if _, err := resolveKind(context.Background(), Media{Path: mp4}); err == nil || !strings.Contains(err.Error(), "needs ffmpeg") {
+		t.Errorf("junk .mp4 without ffmpeg: %v", err)
+	}
+	wav := filepath.Join(dir, "clip.wav")
+	if err := os.WriteFile(wav, []byte("not audio either"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if k, err := resolveKind(context.Background(), Media{Path: wav}); err != nil || k != MediaAudio {
+		t.Errorf("other file without ffmpeg: %v %v, want audio for mtmd to judge", k, err)
 	}
 }
