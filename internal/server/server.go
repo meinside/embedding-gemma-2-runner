@@ -15,11 +15,9 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
-	"os"
 	"time"
 
 	eg2 "github.com/meinside/embedding-gemma-2-runner"
-	"github.com/meinside/embedding-gemma-2-runner/internal/media"
 )
 
 // ModelID is the model name the API reports. Requests may name any model:
@@ -41,11 +39,13 @@ type Options struct {
 	APIKey    string
 	MaxBody   int64 // bytes per request
 	MaxInputs int   // inputs per request
-	// MaxAudio, if set, rejects audio longer than this, read from its
-	// headers before anything is decoded: mtmd decodes a file whole, and a
-	// long low-bitrate MP3 takes gigabytes. The model itself takes about
-	// five minutes at most (25 tokens a second, 8192 tokens).
+	// MaxAudio and MaxVideo, if set, reject longer media before anything is
+	// decoded (eg2.MediaDuration). mtmd decodes audio whole, so a long
+	// low-bitrate MP3 takes gigabytes; ffmpeg decodes a video whole to pick
+	// its 32 frames. The model itself takes about five minutes of audio at
+	// most (25 tokens a second, 8192 tokens).
 	MaxAudio time.Duration
+	MaxVideo time.Duration
 	Help     string
 	Logger   *slog.Logger
 }
@@ -136,7 +136,7 @@ func (s *server) embeddings(w http.ResponseWriter, r *http.Request) {
 
 	inputs, err := s.parseInputs(req)
 	if err == nil {
-		err = s.checkAudio(inputs)
+		err = s.checkMedia(r.Context(), inputs)
 	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error(), "input")
@@ -214,48 +214,26 @@ func (s *server) parseInputs(req request) ([]eg2.Input, error) {
 	return inputs, nil
 }
 
-// audioHead is how much of an audio file on disk is read for its duration:
-// room for an ID3 tag with cover art before the first MP3 frame.
-const audioHead = 1 << 20
-
-// checkAudio rejects audio inputs longer than MaxAudio.
-func (s *server) checkAudio(inputs []eg2.Input) error {
-	if s.opts.MaxAudio <= 0 {
-		return nil
-	}
+// checkMedia rejects audio and video inputs longer than MaxAudio and MaxVideo.
+func (s *server) checkMedia(ctx context.Context, inputs []eg2.Input) error {
+	limits := map[eg2.MediaKind]time.Duration{eg2.MediaAudio: s.opts.MaxAudio, eg2.MediaVideo: s.opts.MaxVideo}
 	for i, in := range inputs {
 		for j, m := range in.Media {
-			if m.Kind != eg2.MediaAudio {
+			limit := limits[m.Kind]
+			if limit <= 0 {
 				continue
 			}
-			head, size := m.Data, int64(len(m.Data))
-			if m.Data == nil {
-				var err error
-				if head, size, err = readHead(m.Path, audioHead); err != nil {
-					return fmt.Errorf("input[%d]: %w", i, err)
-				}
+			d, ok, err := eg2.MediaDuration(ctx, m)
+			if err != nil {
+				return fmt.Errorf("input[%d]: %s %d: %w", i, m.Kind, j+1, err)
 			}
-			if d, ok := media.AudioDuration(head, size); ok && d > s.opts.MaxAudio {
-				return fmt.Errorf("input[%d]: audio %d is %s long, more than the %s allowed",
-					i, j+1, d.Round(time.Second), s.opts.MaxAudio)
+			if ok && d > limit {
+				return fmt.Errorf("input[%d]: %s %d is %s long, more than the %s allowed",
+					i, m.Kind, j+1, d.Round(time.Second), limit)
 			}
 		}
 	}
 	return nil
-}
-
-func readHead(path string, n int64) ([]byte, int64, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, 0, err
-	}
-	head, err := io.ReadAll(io.LimitReader(f, n))
-	return head, fi.Size(), err
 }
 
 // encodeBase64 is OpenAI's base64 format: little-endian float32s.

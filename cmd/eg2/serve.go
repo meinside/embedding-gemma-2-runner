@@ -27,6 +27,7 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) error {
 	maxBody := fs.Int64("max-body", 64, "largest request in `MiB`")
 	maxInputs := fs.Int("max-inputs", 256, "most inputs per request")
 	maxAudio := fs.Duration("max-audio", 10*time.Minute, "reject audio longer than this, read from its headers (0: no limit)")
+	maxVideo := fs.Duration("max-video", 10*time.Minute, "reject video longer than this, read with ffprobe (0: no limit)")
 	preload := fs.Bool("media", false, "load the vision and audio encoders at start, not on the first media input")
 	if err := parseFlags(fs, args); err != nil {
 		return err
@@ -64,6 +65,7 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) error {
 			MaxBody:         *maxBody << 20,
 			MaxInputs:       *maxInputs,
 			MaxAudio:        *maxAudio,
+			MaxVideo:        *maxVideo,
 			Help:            inputsHelp(),
 			Logger:          logger,
 		}),

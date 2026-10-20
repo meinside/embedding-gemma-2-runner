@@ -9,6 +9,9 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -189,5 +192,25 @@ func TestMaxAudio(t *testing.T) {
 	}
 	if rec := post(t, New(&fake{}, Options{}), long); rec.Code != http.StatusOK {
 		t.Errorf("1 hour of audio without a limit: %d %s; want 200", rec.Code, rec.Body)
+	}
+}
+
+func TestMaxVideo(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("needs ffmpeg")
+	}
+	clip := filepath.Join(t.TempDir(), "clip.mp4")
+	if out, err := exec.Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=red:s=64x64:d=3:r=5",
+		"-pix_fmt", "yuv420p", clip).CombinedOutput(); err != nil {
+		t.Fatalf("ffmpeg: %v\n%s", err, out)
+	}
+	body := `{"input":{"video":` + strconv.Quote(clip) + `}}`
+	h := New(&fake{}, Options{AllowLocalFiles: true, MaxVideo: time.Second})
+	if rec := post(t, h, body); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "video 1 is 3s long") {
+		t.Errorf("3 s of video: %d %s; want 400", rec.Code, rec.Body)
+	}
+	h = New(&fake{}, Options{AllowLocalFiles: true, MaxVideo: 5 * time.Second})
+	if rec := post(t, h, body); rec.Code != http.StatusOK {
+		t.Errorf("3 s of video under the limit: %d %s; want 200", rec.Code, rec.Body)
 	}
 }

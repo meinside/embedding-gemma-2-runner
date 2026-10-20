@@ -12,11 +12,13 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/meinside/embedding-gemma-2-runner/internal/assets"
 	"github.com/meinside/embedding-gemma-2-runner/internal/engine"
@@ -294,6 +296,63 @@ func (e *Embedder) embedOne(ctx context.Context, in Input) ([]float32, int, stri
 	}
 	vec, err := normalize(emb.Vec)
 	return vec, emb.Tokens, mod, err
+}
+
+// audioHead is how much of an audio file MediaDuration reads: room for an
+// ID3 tag with cover art before the first MP3 frame.
+const audioHead = 1 << 20
+
+// MediaDuration reads how long audio or video plays without decoding it:
+// audio from its headers (WAV, FLAC, MP3), video from ffprobe. ok is false
+// when it cannot tell: other audio formats, or video without ffmpeg. A
+// server uses it to refuse long media before mtmd decodes them whole.
+func MediaDuration(ctx context.Context, m Media) (d time.Duration, ok bool, err error) {
+	kind, err := resolveKind(ctx, m)
+	if err != nil {
+		return 0, false, err
+	}
+	switch kind {
+	case MediaAudio:
+		head, size, err := mediaHead(m, audioHead)
+		if err != nil {
+			return 0, false, err
+		}
+		d, ok := media.AudioDuration(head, size)
+		return d, ok, nil
+	case MediaVideo:
+		if !media.FFmpegAvailable() {
+			return 0, false, nil
+		}
+		path, cleanup, err := mediaFile(m)
+		if err != nil {
+			return 0, false, err
+		}
+		defer cleanup()
+		meta, ok, err := media.ProbeVideo(ctx, path)
+		if err != nil || !ok {
+			return 0, false, err
+		}
+		return time.Duration(meta.Duration * float64(time.Second)), true, nil
+	}
+	return 0, false, nil
+}
+
+// mediaHead returns the first n bytes of m and its full size.
+func mediaHead(m Media, n int64) ([]byte, int64, error) {
+	if m.Data != nil {
+		return m.Data, int64(len(m.Data)), nil
+	}
+	f, err := os.Open(m.Path)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, 0, err
+	}
+	head, err := io.ReadAll(io.LimitReader(f, n))
+	return head, fi.Size(), err
 }
 
 // videoExts are file extensions of video containers, used only to word the

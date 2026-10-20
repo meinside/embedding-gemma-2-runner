@@ -141,7 +141,9 @@ func parseMP3Header(b []byte) (h mp3Header, ok bool) {
 
 // mp3Duration finds the first frame after any ID3v2 tag. A Xing, Info or
 // VBRI tag in it gives the frame count; otherwise the file is taken as
-// constant bitrate.
+// constant bitrate at the first frame's rate. A variable-bitrate file
+// without such a tag (rare: encoders write one) can come out off by about
+// a factor of two; counting its frames would mean reading the whole file.
 func mp3Duration(head []byte, size int64) (time.Duration, bool) {
 	off := 0
 	if len(head) >= 10 && string(head[:3]) == "ID3" {
